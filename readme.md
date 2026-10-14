@@ -1,2 +1,2 @@
-# Master Server
-The master server for the Communism Network.
+# Communism Network
+A super secure (probably) chat app for people in communist china.
