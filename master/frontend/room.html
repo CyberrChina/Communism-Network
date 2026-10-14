@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Communism Network Rooms</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #15191e; color: #edf1f5; }
+    body { max-width: 760px; margin: 0 auto; padding: 2rem 1rem; }
+    h1, h2 { margin-bottom: .4rem; }
+    p { color: #b8c2cc; }
+    section, .server { background: #20262d; border: 1px solid #39434e; border-radius: 8px; padding: 1rem; margin: 1rem 0; }
+    label { display: block; margin: .8rem 0 .25rem; }
+    input, button, .join { font: inherit; border-radius: 5px; padding: .55rem .75rem; }
+    input { box-sizing: border-box; width: 100%; color: inherit; background: #15191e; border: 1px solid #596674; }
+    button, .join { border: 0; background: #c83737; color: white; cursor: pointer; text-decoration: none; display: inline-block; }
+    button { margin-top: .9rem; }
+    .server { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
+    .server h3, .server p { margin: .2rem 0; }
+    .status { min-height: 1.5rem; }
+    @media (max-width: 520px) { .server { align-items: flex-start; flex-direction: column; } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Communism Network</h1>
+    <p>Browse rooms approved by the master server.</p>
+  </header>
+
+  <main>
+    <section aria-labelledby="rooms-heading">
+      <h2 id="rooms-heading">Server list</h2>
+      <p id="list-status" class="status" role="status">Loading rooms...</p>
+      <div id="servers"></div>
+    </section>
+
+    <section aria-labelledby="request-heading">
+      <h2 id="request-heading">Request to be listed</h2>
+      <p>Your room will appear in the server list after the master approves it.</p>
+      <form id="request-form">
+        <label for="room-name">Room name</label>
+        <input id="room-name" name="room_name" required maxlength="100">
+        <label for="server-address">Room server URL</label>
+        <input id="server-address" name="server_address" type="url" placeholder="https://example.com" required>
+        <button type="submit">Ask the master to add this room</button>
+      </form>
+      <p id="request-status" class="status" role="status"></p>
+    </section>
+  </main>
+
+  <script>
+    const listStatus = document.querySelector("#list-status");
+    const serversElement = document.querySelector("#servers");
+
+    async function loadServers() {
+      listStatus.textContent = "Loading rooms...";
+      try {
+        const response = await fetch("/api/servers");
+        const result = await response.json();
+        if (!response.ok || !result.ok) throw new Error(result.error || "Could not load rooms.");
+
+        serversElement.replaceChildren();
+        if (result.rooms.length === 0) {
+          listStatus.textContent = "There are no approved rooms yet.";
+          return;
+        }
+        listStatus.textContent = "";
+        for (const server of result.rooms) {
+          const card = document.createElement("article");
+          card.className = "server";
+          const info = document.createElement("div");
+          const name = document.createElement("h3");
+          name.textContent = server.room_name;
+          const address = document.createElement("p");
+          address.textContent = server.server_address;
+          const join = document.createElement("a");
+          join.className = "join";
+          join.href = server.server_address;
+          join.target = "_blank";
+          join.rel = "noopener noreferrer";
+          join.textContent = "Join";
+          info.append(name, address);
+          card.append(info, join);
+          serversElement.append(card);
+        }
+      } catch (error) {
+        listStatus.textContent = error.message;
+      }
+    }
+
+    document.querySelector("#request-form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const status = document.querySelector("#request-status");
+      const form = new FormData(event.currentTarget);
+      status.textContent = "Sending request...";
+      try {
+        const response = await fetch("/api/request-listing", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(Object.fromEntries(form)),
+        });
+        const result = await response.json();
+        if (!response.ok || !result.ok) throw new Error(result.error || "Could not send request.");
+        status.textContent = "Request sent to the master for approval.";
+        event.currentTarget.reset();
+      } catch (error) {
+        status.textContent = error.message;
+      }
+    });
+
+    loadServers();
+  </script>
+</body>
+</html>

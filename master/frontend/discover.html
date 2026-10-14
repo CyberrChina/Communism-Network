@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Master - Communism Network</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #15191e; color: #edf1f5; }
+    body { max-width: 820px; margin: 0 auto; padding: 2rem 1rem; }
+    p { color: #b8c2cc; }
+    section, article { background: #20262d; border: 1px solid #39434e; border-radius: 8px; padding: 1rem; margin: 1rem 0; }
+    article { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
+    article h3, article p { margin: .2rem 0; overflow-wrap: anywhere; }
+    button, a { font: inherit; border-radius: 5px; padding: .55rem .75rem; }
+    button { border: 0; background: #c83737; color: white; cursor: pointer; }
+    a { color: #ff8d8d; }
+    .status { min-height: 1.5rem; }
+    @media (max-width: 520px) { article { align-items: flex-start; flex-direction: column; } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Master server</h1>
+    <p>Review room listing requests and approve rooms for the public server list.</p>
+    <a href="/room">Browse the server list</a>
+  </header>
+
+  <main>
+    <section>
+      <h2>Pending requests</h2>
+      <p id="request-status" class="status" role="status">Loading requests...</p>
+      <div id="requests"></div>
+    </section>
+    <section>
+      <h2>Approved server list</h2>
+      <p id="server-status" class="status" role="status">Loading servers...</p>
+      <div id="servers"></div>
+    </section>
+  </main>
+
+  <script>
+    async function loadData() {
+      const requestStatus = document.querySelector("#request-status");
+      const serverStatus = document.querySelector("#server-status");
+      const requestsElement = document.querySelector("#requests");
+      const serversElement = document.querySelector("#servers");
+      try {
+        const [requestsResponse, serversResponse] = await Promise.all([
+          fetch("/routing/requests"),
+          fetch("/routing/rooms"),
+        ]);
+        const [requestsResult, serversResult] = await Promise.all([
+          requestsResponse.json(),
+          serversResponse.json(),
+        ]);
+        if (!requestsResponse.ok || !requestsResult.ok) {
+          throw new Error(requestsResult.error || "Could not load requests.");
+        }
+        if (!serversResponse.ok || !serversResult.ok) {
+          throw new Error(serversResult.error || "Could not load servers.");
+        }
+
+        requestsElement.replaceChildren();
+        if (requestsResult.requests.length === 0) {
+          requestStatus.textContent = "No pending room requests.";
+        } else {
+          requestStatus.textContent = "";
+          for (const item of requestsResult.requests) {
+            const card = document.createElement("article");
+            const details = document.createElement("div");
+            const name = document.createElement("h3");
+            name.textContent = item.room_name;
+            const message = document.createElement("p");
+            message.textContent = item.message;
+            const address = document.createElement("p");
+            address.textContent = item.server_address;
+            details.append(name, message, address);
+            const approve = document.createElement("button");
+            approve.type = "button";
+            approve.textContent = "Approve";
+            approve.addEventListener("click", () => approveRequest(item.request_id));
+            card.append(details, approve);
+            requestsElement.append(card);
+          }
+        }
+
+        serversElement.replaceChildren();
+        if (serversResult.rooms.length === 0) {
+          serverStatus.textContent = "No rooms have been approved.";
+        } else {
+          serverStatus.textContent = "";
+          for (const item of serversResult.rooms) {
+            const card = document.createElement("article");
+            const details = document.createElement("div");
+            const name = document.createElement("h3");
+            name.textContent = item.room_name;
+            const address = document.createElement("p");
+            address.textContent = item.server_address;
+            details.append(name, address);
+            card.append(details);
+            serversElement.append(card);
+          }
+        }
+      } catch (error) {
+        requestStatus.textContent = error.message;
+        serverStatus.textContent = error.message;
+      }
+    }
+
+    async function approveRequest(requestId) {
+      try {
+        const response = await fetch(`/routing/requests/${encodeURIComponent(requestId)}/approve`, {
+          method: "POST",
+        });
+        const result = await response.json();
+        if (!response.ok || !result.ok) throw new Error(result.error || "Could not approve room.");
+        await loadData();
+      } catch (error) {
+        document.querySelector("#request-status").textContent = error.message;
+      }
+    }
+
+    loadData();
+  </script>
+</body>
+</html>
