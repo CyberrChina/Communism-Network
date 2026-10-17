@@ -89,7 +89,7 @@ async function loadJoinedRooms() {
       container.innerHTML = '<div class="empty">You have not joined a room yet. Visit Discover to find one.</div>';
       return;
     }
-    data.servers.forEach((server) => container.appendChild(roomCard({ room_id: server.id, room_name: server.name || "Joined room", server_address: server.server_address || `${server.ip_address}:${server.port}` }, "open")));
+    data.servers.forEach((server) => container.appendChild(roomCard({ room_id: server.room_id || server.id, room_name: server.name || "Joined room", server_address: server.server_address || `${server.ip_address}:${server.port}` }, "open")));
   } catch (error) {
     container.innerHTML = `<div class="empty">${error.message}</div>`;
   }
