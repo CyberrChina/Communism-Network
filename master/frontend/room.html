@@ -1,3 +1,100 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Room | Communism Network</title><link rel="stylesheet" href="app.css"></head>
-<body><header class="shell topbar"><a class="brand" href="index.html"><span class="brand-mark">✦</span> Communism Network</a><nav class="nav"><a href="index.html">Home</a><a href="discover.html">Discover</a><button class="button ghost small" data-logout>Log out</button></nav></header><main class="shell app-main"><section class="empty"><span class="eyebrow">Room backend</span><h2>Messages are coming later.</h2><p>This page is intentionally only the room entry point for now. The room server will own message storage and fetching when that layer is added.</p><a class="button primary" href="index.html">Back home</a></section></main><script src="app.js"></script></body></html>
+<body><header class="shell topbar"><a class="brand" href="index.html"><span class="brand-mark">✦</span> Communism Network</a><nav class="nav"><a href="index.html">Home</a><a href="discover.html">Discover</a><button class="button ghost small" data-logout>Log out</button></nav></header>
+<main class="shell app-main room-layout"><section class="dashboard-head"><div><span class="eyebrow">Direct room connection</span><h1 id="room-title">Connecting...</h1><p id="connection-status">Requesting an authorized room ticket.</p></div><a class="button ghost small" href="index.html">Back home</a></section>
+<section class="chat-panel"><div id="message-list" class="message-list" aria-live="polite"><div class="empty">Loading encrypted room history...</div></div><form id="message-form" class="message-form"><label class="sr-only" for="message-input">Message</label><textarea id="message-input" rows="2" maxlength="2000" placeholder="Write a message..." disabled></textarea><button class="button primary" type="submit" disabled>Send</button></form></section></main>
+<script>
+const API_BASE = window.NETWORK_API_BASE || "../backend/api";
+const roomId = new URLSearchParams(window.location.search).get("room");
+const statusText = document.querySelector("#connection-status");
+const roomTitle = document.querySelector("#room-title");
+const messageList = document.querySelector("#message-list");
+const form = document.querySelector("#message-form");
+const input = document.querySelector("#message-input");
+const sendButton = form.querySelector("button");
+let socket;
+let csrfToken = "";
+const rendered = new Set();
+
+async function api(path, options = {}) {
+  const method = (options.method || "GET").toUpperCase();
+  const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
+  if (csrfToken && method !== "GET") headers["X-CSRF-Token"] = csrfToken;
+  const response = await fetch(`${API_BASE}${path}`, { credentials: "same-origin", headers, ...options });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || "The network request failed.");
+  if (data.csrf_token) csrfToken = data.csrf_token;
+  return data;
+}
+
+function setStatus(message, error = false) {
+  statusText.textContent = message;
+  statusText.dataset.error = error ? "true" : "false";
+}
+
+function renderMessage(message) {
+  if (!message || rendered.has(message.message_id)) return;
+  rendered.add(message.message_id);
+  const empty = messageList.querySelector(".empty");
+  if (empty) empty.remove();
+  const item = document.createElement("article");
+  item.className = "message-item";
+  const timestamp = new Date(message.sent_at).toLocaleString([], { dateStyle: "short", timeStyle: "short" });
+  item.innerHTML = '<div class="message-meta"><strong></strong><time></time></div><p></p>';
+  item.querySelector("strong").textContent = message.sender_name;
+  item.querySelector("time").textContent = timestamp;
+  item.querySelector("p").textContent = message.body;
+  messageList.appendChild(item);
+  messageList.scrollTop = messageList.scrollHeight;
+}
+
+function openSocket(connection) {
+  socket = new WebSocket(connection.ws_address);
+  socket.addEventListener("open", () => {
+    socket.send(JSON.stringify({ type: "authenticate", ticket: connection.connection_ticket }));
+    setStatus("Connecting directly to the room server...");
+  });
+  socket.addEventListener("message", (event) => {
+    const payload = JSON.parse(event.data);
+    if (payload.type === "authenticated") {
+      roomTitle.textContent = connection.room_name;
+      setStatus("Connected directly to the room server.");
+      payload.history.forEach(renderMessage);
+      input.disabled = false;
+      sendButton.disabled = false;
+      input.focus();
+    } else if (payload.type === "new_message") {
+      renderMessage(payload.message);
+    } else if (payload.type === "error") {
+      setStatus(payload.message || "Room connection failed.", true);
+    }
+  });
+  socket.addEventListener("close", () => {
+    input.disabled = true;
+    sendButton.disabled = true;
+    setStatus("Room connection closed. Refresh to reconnect.", true);
+  });
+  socket.addEventListener("error", () => setStatus("Unable to reach the room server.", true));
+}
+
+form.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const body = input.value.trim();
+  if (!body || !socket || socket.readyState !== WebSocket.OPEN) return;
+  const clientMessageId = crypto.randomUUID();
+  socket.send(JSON.stringify({ type: "send_message", room_id: roomId, client_message_id: clientMessageId, body }));
+  input.value = "";
+});
+
+(async () => {
+  if (!roomId) { setStatus("No room was selected.", true); return; }
+  try {
+    const connection = await api(`/rooms/${encodeURIComponent(roomId)}/connection`);
+    openSocket(connection);
+  } catch (error) {
+    setStatus(error.message, true);
+    messageList.innerHTML = `<div class="empty"></div>`;
+    messageList.querySelector(".empty").textContent = error.message;
+  }
+})();
+</script></body></html>

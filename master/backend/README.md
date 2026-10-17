@@ -30,6 +30,10 @@ Routes exposed by this Flask app:
 - `POST /routing/rooms`
 - `GET /routing/rooms`
 - `GET /routing/rooms/<room_id>`
+- `POST /api/rooms/register`
+- `POST /api/rooms/heartbeat`
+- `GET /api/rooms/<room_id>/connection`
+- `POST /api/rooms/<room_id>/events`
 - `POST /auth/register`
 - `POST /api/auth/signup`
 - `POST /auth/login`
@@ -47,6 +51,12 @@ Routes exposed by this Flask app:
 The frontend in `../frontend` uses those `/api` aliases. Joined rooms are
 stored in `user_servers`; room messages are deliberately not handled by this
 master backend.
+
+Set `CHAT_ROOM_REGISTRATION_SECRET` on the master and the matching
+`MASTER_REGISTRATION_TOKEN` on each room server. Set the same high-entropy
+`CHAT_ROOM_TICKET_SECRET` on the master and room server so the room backend can
+verify short-lived connection tickets. The master never proxies ordinary live
+messages.
 
 ## Database setup
 

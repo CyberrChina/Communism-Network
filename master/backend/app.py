@@ -5,6 +5,7 @@ import json
 import os
 import re
 import secrets
+import hmac
 from pathlib import Path
 from urllib.parse import urlparse
 from contextlib import contextmanager
@@ -18,6 +19,7 @@ import pymysql
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
 from flask import Flask, jsonify, request, session
+from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 app = Flask(__name__)
 app.config.update(
@@ -30,6 +32,11 @@ app.config.update(
 rooms: dict[str, dict[str, Any]] = {}
 rooms_lock = Lock()
 ROOMS_FILE = Path(os.environ.get("CHAT_ROOMS_FILE", Path(__file__).with_name("serverlist.json")))
+ROOM_HEARTBEAT_TIMEOUT = int(os.environ.get("CHAT_ROOM_HEARTBEAT_TIMEOUT", "90"))
+ROOM_REGISTRATION_SECRET = os.environ.get("CHAT_ROOM_REGISTRATION_SECRET", "")
+ROOM_TICKET_SECRET = os.environ.get("CHAT_ROOM_TICKET_SECRET", app.config["SECRET_KEY"])
+ROOM_TICKET_MAX_AGE = int(os.environ.get("CHAT_ROOM_TICKET_MAX_AGE", "120"))
+ticket_serializer = URLSafeTimedSerializer(ROOM_TICKET_SECRET, salt="communism-network-room-ticket-v1")
 password_hasher = PasswordHasher()
 USERNAME_RE = re.compile(r"^[A-Za-z0-9_]{3,32}$")
 
@@ -163,17 +170,50 @@ def login_required(view):
 def clean_room_payload(payload: dict[str, Any]):
     room_name = str(payload.get("room_name") or payload.get("name") or "").strip()
     server_address = str(payload.get("server_address") or payload.get("server_url") or payload.get("url") or "").strip()
+    ws_address = str(payload.get("ws_address") or "").strip()
+    room_id = str(payload.get("room_id") or "").strip()
+    protocol_version = str(payload.get("protocol_version") or "1").strip()
     if not room_name:
         return None, "missing room_name"
     if not server_address:
         return None, "missing server_address"
-    room_id = sha256(f"{room_name}\0{server_address}".encode()).hexdigest()[:16]
-    return {"room_id": room_id, "room_name": room_name, "server_address": server_address, "last_seen": utc_now()}, None
+    if not room_id:
+        room_id = sha256(f"{room_name}\0{server_address}".encode()).hexdigest()[:16]
+    parsed = room_endpoint(ws_address or server_address)
+    if parsed is None:
+        return None, "server_address must be a valid http(s) or ws(s) URL"
+    return {
+        "room_id": room_id,
+        "room_name": room_name,
+        "server_address": server_address,
+        "ws_address": ws_address or server_address.replace("https://", "wss://").replace("http://", "ws://"),
+        "protocol_version": protocol_version,
+        "last_heartbeat": utc_now(),
+        "status": "online",
+    }, None
+
+
+def room_is_online(room: dict[str, Any]) -> bool:
+    try:
+        last_heartbeat = datetime.fromisoformat(str(room.get("last_heartbeat") or room.get("last_seen")))
+        if last_heartbeat.tzinfo is None:
+            last_heartbeat = last_heartbeat.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - last_heartbeat).total_seconds() <= ROOM_HEARTBEAT_TIMEOUT
+    except (TypeError, ValueError):
+        return False
+
+
+def require_room_server_auth() -> bool:
+    if not ROOM_REGISTRATION_SECRET:
+        return True
+    provided = request.headers.get("Authorization", "")
+    expected = f"Bearer {ROOM_REGISTRATION_SECRET}"
+    return hmac.compare_digest(provided, expected)
 
 
 def room_endpoint(address: str) -> tuple[str, int] | None:
     parsed = urlparse(address if "://" in address else f"https://{address}")
-    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+    if parsed.scheme not in {"http", "https", "ws", "wss"} or not parsed.hostname:
         return None
     try:
         port = parsed.port or (443 if parsed.scheme == "https" else 80)
@@ -192,7 +232,8 @@ def sync_room_server(room: dict[str, Any]) -> int | None:
             cursor.execute(
                 """INSERT INTO servers (ip_address, port, name, server_address, room_id)
                    VALUES (%s, %s, %s, %s, %s)
-                   ON DUPLICATE KEY UPDATE name = VALUES(name), server_address = VALUES(server_address)""",
+                   ON DUPLICATE KEY UPDATE ip_address = VALUES(ip_address), port = VALUES(port),
+                       name = VALUES(name), server_address = VALUES(server_address)""",
                 (host, port, room["room_name"], room["server_address"], room["room_id"]),
             )
             cursor.execute("SELECT id FROM servers WHERE room_id = %s", (room["room_id"],))
@@ -322,7 +363,7 @@ def join_server(server_id: int):
 def list_servers():
     try:
         with db_connection() as connection, connection.cursor() as cursor:
-            cursor.execute("""SELECT s.id, s.ip_address, s.port, s.name, s.server_address, us.joined_at
+            cursor.execute("""SELECT s.id, s.room_id, s.ip_address, s.port, s.name, s.server_address, us.joined_at
                               FROM user_servers AS us
                               INNER JOIN servers AS s ON s.id = us.server_id
                               WHERE us.user_id = %s ORDER BY us.joined_at DESC""", (current_user_id(),))
@@ -336,7 +377,7 @@ def list_servers():
 def discover_servers():
     user_id = current_user_id()
     with rooms_lock:
-        discovered = [dict(room) for room in rooms.values()]
+        discovered = [dict(room) for room in rooms.values() if room_is_online(room)]
     joined_ids: set[int] = set()
     if user_id is not None:
         try:
@@ -351,6 +392,48 @@ def discover_servers():
         except pymysql.MySQLError:
             return error("database unavailable")
     return jsonify({"ok": True, "rooms": sorted(discovered, key=lambda room: room["room_name"].lower())})
+
+
+@app.get("/rooms/<room_id>/connection")
+@login_required
+def room_connection(room_id: str):
+    with rooms_lock:
+        room = dict(rooms.get(room_id) or {})
+    if not room:
+        return error("room not found", 404)
+    if not room_is_online(room):
+        return error("room server is offline", 503)
+    try:
+        with db_connection() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                """SELECT u.id, u.username, s.id AS server_id
+                   FROM users AS u
+                   INNER JOIN user_servers AS us ON us.user_id = u.id
+                   INNER JOIN servers AS s ON s.id = us.server_id
+                   WHERE u.id = %s AND s.room_id = %s""",
+                (current_user_id(), room_id),
+            )
+            membership = cursor.fetchone()
+    except pymysql.MySQLError:
+        return error("database unavailable")
+    if not membership:
+        return error("room membership required", 403)
+    ticket = ticket_serializer.dumps({
+        "aud": "room-server",
+        "room_id": room_id,
+        "user_id": int(membership["id"]),
+        "username": membership["username"],
+        "server_id": int(membership["server_id"]),
+    })
+    return jsonify({
+        "ok": True,
+        "room_id": room_id,
+        "room_name": room["room_name"],
+        "ws_address": room["ws_address"],
+        "protocol_version": room.get("protocol_version", "1"),
+        "connection_ticket": ticket,
+        "expires_in": ROOM_TICKET_MAX_AGE,
+    })
 
 
 @app.post("/servers/join")
@@ -392,8 +475,11 @@ def leave_server(server_id: int):
     return jsonify({"ok": True})
 
 
+@app.post("/api/rooms/register")
 @app.post("/routing/rooms")
-def receive_room_server_message():
+def register_room_server():
+    if not require_room_server_auth():
+        return error("room server authentication failed", 401)
     payload = request.get_json(silent=True)
     if not isinstance(payload, dict):
         return error("expected json object", 400)
@@ -412,6 +498,49 @@ def receive_room_server_message():
             rooms[room["room_id"]]["server_id"] = server_id
             save_rooms()
     return jsonify({"ok": True, "created": not already_known, "room": room}), 201 if not already_known else 200
+
+
+@app.post("/api/rooms/heartbeat")
+@app.post("/routing/rooms/<room_id>/heartbeat")
+def room_heartbeat(room_id: str | None = None):
+    if not require_room_server_auth():
+        return error("room server authentication failed", 401)
+    payload = request.get_json(silent=True) or {}
+    room_id = room_id or str(payload.get("room_id") or "").strip()
+    if not room_id:
+        return error("missing room_id", 400)
+    with rooms_lock:
+        room = rooms.get(room_id)
+        if room is None:
+            return error("room not found", 404)
+        room["last_heartbeat"] = utc_now()
+        room["status"] = "online"
+        save_rooms()
+    return jsonify({"ok": True, "room_id": room_id, "status": "online", "last_heartbeat": room["last_heartbeat"]})
+
+
+@app.post("/api/rooms/<room_id>/events")
+def room_event(room_id: str):
+    if not require_room_server_auth():
+        return error("room server authentication failed", 401)
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return error("expected json object", 400)
+    if payload.get("event") not in {"status", "occupancy", "sync_metadata"}:
+        return error("unsupported room event", 400)
+    with rooms_lock:
+        room = rooms.get(room_id)
+        if room is None:
+            return error("room not found", 404)
+        room["last_heartbeat"] = utc_now()
+        room["status"] = "online"
+        if "occupancy" in payload:
+            try:
+                room["occupancy"] = max(0, int(payload["occupancy"]))
+            except (TypeError, ValueError):
+                return error("occupancy must be an integer", 400)
+        save_rooms()
+    return jsonify({"ok": True})
 
 
 @app.get("/routing/rooms")
@@ -440,6 +569,7 @@ app.add_url_rule("/api/servers/joined", endpoint="api_joined", view_func=list_se
 app.add_url_rule("/api/servers/discover", endpoint="api_discover", view_func=discover_servers, methods=["GET"])
 app.add_url_rule("/api/servers/join", endpoint="api_join", view_func=join_discovered_server, methods=["POST"])
 app.add_url_rule("/api/servers/<int:server_id>/join", endpoint="api_leave", view_func=leave_server, methods=["DELETE"])
+app.add_url_rule("/api/rooms/<room_id>/connection", endpoint="api_room_connection", view_func=room_connection, methods=["GET"])
 
 
 load_rooms()
