@@ -17,6 +17,11 @@ MASTER_SERVER_URL=https://communism-network.calvinthegreat.org/master/backend
 MASTER_REGISTRATION_TOKEN=replace-with-a-server-secret
 CHAT_ROOM_TICKET_SECRET=the-same-secret-used-by-the-master
 ROOM_MESSAGE_KEY=base64-fernet-key-kept-outside-the-repository
+ROOM_CHANNELS_JSON='[{"id":"general","name":"General"},{"id":"media","name":"Media"}]'
+ROOM_IMAGES_ENABLED=1
+ROOM_MAX_IMAGE_BYTES=10485760
+ROOM_IMAGE_RETENTION_DAYS=14
+ROOM_MEDIA_CLEANUP_INTERVAL=3600
 ```
 
 Generate a Fernet key with:
@@ -28,7 +33,12 @@ python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().d
 The room server stores encrypted message history in `messages.sqlite3` by
 default. The room server can decrypt its own history for authorized clients;
 this is transport encryption plus encrypted-at-rest storage, not end-to-end
-encryption. Keep `ROOM_MESSAGE_KEY` backed up and rotate it deliberately.
+encryption. Images are stored as Fernet-encrypted files below the database
+directory (or `ROOM_MEDIA_DIRECTORY`) on the room server, never on the master.
+The cleanup loop removes image files, metadata, and message entries older than
+`ROOM_IMAGE_RETENTION_DAYS` (14 days by default). Set `ROOM_IMAGES_ENABLED=0`
+to disable image uploads for a room; the frontend hides its image controls.
+Keep `ROOM_MESSAGE_KEY` backed up and rotate it deliberately.
 
 ## Run
 
@@ -45,9 +55,12 @@ authenticated registration and heartbeats at `/api/rooms/register` and
 
 ## WebSocket protocol
 
-The browser first sends `{"type":"authenticate","ticket":"..."}`. The
-room server verifies the short-lived, room-scoped ticket and responds with an
-`authenticated` event containing a bounded history page. Messages use:
+The browser first sends `{"type":"authenticate","ticket":"...","channel_id":"general"}`.
+The room server verifies the short-lived, room-scoped ticket and responds with
+an `authenticated` event containing the configured channels and a bounded
+history page. Send `{"type":"switch_channel","channel_id":"media"}` to
+change channel; broadcasts are only delivered to clients in the same channel.
+Messages use:
 
 ```json
 {
@@ -61,3 +74,7 @@ room server verifies the short-lived, room-scoped ticket and responds with an
 The server returns `message_ack` and broadcasts `new_message` only after the
 encrypted message has been committed to SQLite. Duplicate client IDs are
 acknowledged without inserting or broadcasting a second message.
+
+Image uploads use `POST /media/upload/<channel_id>` with the same ticket as a
+Bearer token and a multipart `image` field plus `client_message_id`. Authorized
+clients fetch an image through `GET /media/<media_id>` with that ticket.
