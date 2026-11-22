@@ -1,8 +1,8 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Room | Communism Network</title><link rel="stylesheet" href="app.css?v=20261122-voice-categories"></head>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Room | Communism Network</title><link rel="stylesheet" href="app.css?v=20261122-voice-webrtc"></head>
 <body><header class="shell topbar"><a class="brand" href="index.html"><span class="brand-mark">✦</span> Communism Network</a><nav class="nav"><a href="index.html">Home</a><a href="discover.html">Discover</a><button class="button ghost small" data-logout>Sign in</button></nav></header>
 <main class="shell app-main room-layout"><section class="dashboard-head"><div><span class="eyebrow">Direct room connection</span><h1 id="room-title">Connecting...</h1><p id="connection-status">Requesting an authorized room ticket.</p></div><a class="button ghost small" href="index.html">Back home</a></section>
-<section class="chat-panel"><div class="chat-workspace"><aside class="channel-sidebar"><div class="channel-heading"><span>Channels</span><span class="channel-count" id="channel-count">0</span></div><nav id="channel-tabs" class="channel-tabs" aria-label="Room channels"></nav><select id="channel-select" class="sr-only" disabled aria-hidden="true"></select></aside><div class="chat-column"><div id="message-list" class="message-list" aria-live="polite"><div class="empty">Loading encrypted room history...</div></div><form id="message-form" class="message-form"><label id="image-picker-label" class="media-button" hidden title="Attach an image"><span aria-hidden="true">+</span><span class="sr-only">Attach image</span><input id="image-picker" type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden></label><label class="sr-only" for="message-input">Message</label><textarea id="message-input" rows="2" maxlength="2000" placeholder="Write a message..." disabled></textarea><button id="sound-toggle" class="sound-button" type="button" title="Toggle notification sounds">Sound on</button><button class="button primary" type="submit" disabled>Send</button></form></div></div></section></main>
+<section class="chat-panel"><div class="chat-workspace"><aside class="channel-sidebar"><div class="channel-heading"><span>Channels</span><span class="channel-count" id="channel-count">0</span></div><nav id="channel-tabs" class="channel-tabs" aria-label="Room channels"></nav><select id="channel-select" class="sr-only" disabled aria-hidden="true"></select></aside><div class="chat-column"><div id="message-list" class="message-list" aria-live="polite"><div class="empty">Loading encrypted room history...</div></div><form id="message-form" class="message-form"><label id="image-picker-label" class="media-button" hidden title="Attach an image"><span aria-hidden="true">+</span><span class="sr-only">Attach image</span><input id="image-picker" type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden></label><label class="sr-only" for="message-input">Message</label><textarea id="message-input" rows="2" maxlength="2000" placeholder="Write a message..." disabled></textarea><button id="sound-toggle" class="sound-button" type="button" title="Toggle notification sounds">Sound on</button><button id="voice-toggle" class="voice-button" type="button" hidden>Join voice</button><button class="button primary" type="submit" disabled>Send</button></form></div></div></section></main>
 <script>
 const API_BASE = window.NETWORK_API_BASE || "/api";
 const roomId = new URLSearchParams(window.location.search).get("room");
@@ -18,16 +18,22 @@ const imagePickerLabel = document.querySelector("#image-picker-label");
 const channelTabs = document.querySelector("#channel-tabs");
 const channelCount = document.querySelector("#channel-count");
 const soundToggle = document.querySelector("#sound-toggle");
+const voiceToggle = document.querySelector("#voice-toggle");
 let socket;
 let csrfToken = "";
 let connectionTicket = "";
 let roomOrigin = "";
 let currentChannel = "general";
+let currentChannelType = "text";
 let imagesEnabled = false;
 let messagingEnabled = true;
 let notificationSoundsEnabled = true;
 let soundEnabled = true;
 let audioContext;
+let voiceChannel = "";
+let peerId = crypto.randomUUID();
+let localStream;
+const peerConnections = new Map();
 const rendered = new Set();
 
 async function api(path, options = {}) {
@@ -47,11 +53,14 @@ function setStatus(message, error = false) {
 }
 
 function updateComposer() {
-  input.disabled = !messagingEnabled;
-  sendButton.disabled = !messagingEnabled;
-  input.placeholder = messagingEnabled ? "Write a message..." : "Messaging is disabled in this channel";
+  const voiceActive = currentChannelType === "voice";
+  input.disabled = voiceActive || !messagingEnabled;
+  sendButton.disabled = voiceActive || !messagingEnabled;
+  input.placeholder = voiceActive ? "Voice channel" : messagingEnabled ? "Write a message..." : "Messaging is disabled in this channel";
   soundToggle.disabled = !notificationSoundsEnabled;
   soundToggle.textContent = soundEnabled && notificationSoundsEnabled ? "Sound on" : "Sound off";
+  voiceToggle.hidden = !voiceActive;
+  voiceToggle.textContent = voiceChannel === currentChannel ? "Leave voice" : "Join voice";
 }
 
 function playNotification() {
@@ -68,6 +77,70 @@ function playNotification() {
     oscillator.start();
     oscillator.stop(audioContext.currentTime + 0.14);
   } catch (_) { /* Browser audio may require a user gesture. */ }
+}
+
+function sendVoiceSignal(targetPeerId, signal) {
+  if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "voice_signal", target_peer_id: targetPeerId, signal }));
+}
+
+function closePeer(remotePeerId) {
+  const peer = peerConnections.get(remotePeerId);
+  if (peer) peer.close();
+  peerConnections.delete(remotePeerId);
+  document.querySelector(`#voice-audio-${CSS.escape(remotePeerId)}`)?.remove();
+}
+
+async function createPeer(remotePeerId, initiator) {
+  if (peerConnections.has(remotePeerId)) return peerConnections.get(remotePeerId);
+  const peer = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+  peerConnections.set(remotePeerId, peer);
+  localStream?.getTracks().forEach(track => peer.addTrack(track, localStream));
+  peer.onicecandidate = event => { if (event.candidate) sendVoiceSignal(remotePeerId, { type: "candidate", candidate: event.candidate }); };
+  peer.ontrack = event => {
+    let audio = document.querySelector(`#voice-audio-${CSS.escape(remotePeerId)}`);
+    if (!audio) { audio = document.createElement("audio"); audio.id = `voice-audio-${remotePeerId}`; audio.autoplay = true; audio.playsInline = true; audio.hidden = true; document.body.append(audio); }
+    audio.srcObject = event.streams[0];
+  };
+  peer.onconnectionstatechange = () => { if (["failed", "closed", "disconnected"].includes(peer.connectionState)) closePeer(remotePeerId); };
+  if (initiator) {
+    const offer = await peer.createOffer();
+    await peer.setLocalDescription(offer);
+    sendVoiceSignal(remotePeerId, { type: "description", description: peer.localDescription });
+  }
+  return peer;
+}
+
+async function joinVoice() {
+  if (currentChannelType !== "voice" || voiceChannel === currentChannel) return;
+  try {
+    localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    voiceChannel = currentChannel;
+    socket.send(JSON.stringify({ type: "join_voice", channel_id: currentChannel, peer_id: peerId }));
+    voiceToggle.textContent = "Leave voice";
+    setStatus("Connected to voice channel.");
+  } catch (error) { setStatus("Microphone access was denied or unavailable.", true); }
+}
+
+function leaveVoice() {
+  if (voiceChannel && socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "leave_voice" }));
+  localStream?.getTracks().forEach(track => track.stop());
+  localStream = undefined;
+  for (const remotePeerId of peerConnections.keys()) closePeer(remotePeerId);
+  voiceChannel = "";
+  updateComposer();
+}
+
+async function handleVoiceSignal(fromPeerId, signal) {
+  const peer = await createPeer(fromPeerId, false);
+  if (signal.type === "candidate" && signal.candidate) await peer.addIceCandidate(signal.candidate);
+  if (signal.type === "description" && signal.description) {
+    await peer.setRemoteDescription(signal.description);
+    if (signal.description.type === "offer") {
+      const answer = await peer.createAnswer();
+      await peer.setLocalDescription(answer);
+      sendVoiceSignal(fromPeerId, { type: "description", description: peer.localDescription });
+    }
+  }
 }
 
 function renderMessage(message) {
@@ -119,6 +192,7 @@ function openSocket(connection) {
       roomTitle.textContent = connection.room_name;
       setStatus("Connected directly to the room server.");
       currentChannel = payload.channel_id || currentChannel;
+      currentChannelType = payload.channel_type || "text";
       imagesEnabled = payload.images_enabled === true;
       messagingEnabled = payload.messaging_enabled !== false;
       notificationSoundsEnabled = payload.notification_sounds_enabled !== false;
@@ -132,7 +206,9 @@ function openSocket(connection) {
         playNotification();
       }
     } else if (payload.type === "channel_changed") {
+      if (voiceChannel) leaveVoice();
       currentChannel = payload.channel_id;
+      currentChannelType = payload.channel_type || "text";
       channelSelect.value = currentChannel;
       imagesEnabled = payload.images_enabled === true;
       messagingEnabled = payload.messaging_enabled !== false;
@@ -144,6 +220,14 @@ function openSocket(connection) {
       rendered.clear();
       messageList.replaceChildren();
       (payload.history || []).forEach(renderMessage);
+    } else if (payload.type === "voice_peers") {
+      payload.peers.forEach(remotePeerId => createPeer(remotePeerId, true));
+    } else if (payload.type === "voice_user_joined") {
+      if (payload.peer_id !== peerId && voiceChannel === payload.channel_id) createPeer(payload.peer_id, true);
+    } else if (payload.type === "voice_user_left") {
+      closePeer(payload.peer_id);
+    } else if (payload.type === "voice_signal") {
+      handleVoiceSignal(payload.from_peer_id, payload.signal).catch(() => setStatus("Voice connection negotiation failed.", true));
     } else if (payload.type === "error") {
       setStatus(payload.message || "Room connection failed.", true);
     }
@@ -151,6 +235,7 @@ function openSocket(connection) {
   socket.addEventListener("close", () => {
     input.disabled = true;
     sendButton.disabled = true;
+    leaveVoice();
     setStatus("Room connection closed. Refresh to reconnect.", true);
   });
   socket.addEventListener("error", () => setStatus("Unable to reach the room server.", true));
@@ -223,8 +308,11 @@ form.addEventListener("submit", (event) => {
 });
 
 channelSelect.addEventListener("change", () => {
+  if (voiceChannel) leaveVoice();
   if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "switch_channel", channel_id: channelSelect.value }));
 });
+
+voiceToggle.addEventListener("click", () => voiceChannel === currentChannel ? leaveVoice() : joinVoice());
 
 imagePicker.addEventListener("change", async () => {
   const file = imagePicker.files[0];

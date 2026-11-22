@@ -433,6 +433,20 @@ def send_json(ws: object, payload: dict[str, object]) -> bool:
         return False
 
 
+def voice_clients(channel_id: str, exclude: object | None = None) -> list[tuple[object, dict[str, object]]]:
+    with clients_lock:
+        return [(ws, client) for ws, client in clients.items() if ws is not exclude and client.get("voice_channel") == channel_id]
+
+
+def leave_voice(ws: object, client: dict[str, object]) -> None:
+    channel_id = client.pop("voice_channel", None)
+    peer_id = client.pop("peer_id", None)
+    if not isinstance(channel_id, str) or not isinstance(peer_id, str):
+        return
+    for other_ws, _other_client in voice_clients(channel_id, exclude=ws):
+        send_json(other_ws, {"type": "voice_user_left", "peer_id": peer_id})
+
+
 def broadcast(payload: dict[str, object], channel_id: str | None = None) -> None:
     with clients_lock:
         connected = [(ws, client) for ws, client in clients.items() if channel_id is None or client.get("channel_id") == channel_id]
@@ -461,12 +475,43 @@ def parse_auth(raw: str) -> dict[str, object] | None:
 
 
 def handle_message(ws: object, client: dict[str, object], event: dict[str, object]) -> bool:
+    if event.get("type") == "join_voice":
+        channel_id = str(event.get("channel_id") or "").strip().lower()
+        peer_id = str(event.get("peer_id") or "").strip()
+        if CHANNEL_MAP.get(channel_id, {}).get("type") != "voice" or not peer_id or len(peer_id) > 128:
+            return send_json(ws, {"type": "error", "code": "invalid_voice_channel", "message": "invalid voice channel or peer id"})
+        leave_voice(ws, client)
+        client["voice_channel"] = channel_id
+        client["peer_id"] = peer_id
+        peers = [other_client["peer_id"] for _other_ws, other_client in voice_clients(channel_id, exclude=ws) if isinstance(other_client.get("peer_id"), str)]
+        if not send_json(ws, {"type": "voice_peers", "channel_id": channel_id, "peers": peers}):
+            return False
+        for other_ws, _other_client in voice_clients(channel_id, exclude=ws):
+            if not send_json(other_ws, {"type": "voice_user_joined", "channel_id": channel_id, "peer_id": peer_id}):
+                remove_client(other_ws)
+        return True
+    if event.get("type") == "leave_voice":
+        leave_voice(ws, client)
+        return True
+    if event.get("type") == "voice_signal":
+        target_peer_id = str(event.get("target_peer_id") or "").strip()
+        signal = event.get("signal")
+        channel_id = client.get("voice_channel")
+        peer_id = client.get("peer_id")
+        if not isinstance(channel_id, str) or not isinstance(peer_id, str) or not isinstance(signal, dict) or len(json.dumps(signal)) > 32768:
+            return send_json(ws, {"type": "error", "code": "invalid_voice_signal", "message": "invalid voice signal"})
+        for other_ws, other_client in voice_clients(channel_id):
+            if other_client.get("peer_id") == target_peer_id:
+                return send_json(other_ws, {"type": "voice_signal", "from_peer_id": peer_id, "signal": signal})
+        return send_json(ws, {"type": "error", "code": "voice_peer_not_found", "message": "voice peer not found"})
     if event.get("type") == "switch_channel":
         channel_id = str(event.get("channel_id") or "").strip().lower()
         if not channel_exists(channel_id):
             return send_json(ws, {"type": "error", "code": "unknown_channel", "message": "unknown channel"})
+        if client.get("voice_channel") != channel_id:
+            leave_voice(ws, client)
         client["channel_id"] = channel_id
-        return send_json(ws, {"type": "channel_changed", "channel_id": channel_id, "images_enabled": channel_images_enabled(channel_id), "messaging_enabled": CHANNEL_MAP[channel_id]["type"] == "text" and channel_messaging_enabled(channel_id), "notification_sounds_enabled": channel_notifications_enabled(channel_id), "history": history(channel_id)})
+        return send_json(ws, {"type": "channel_changed", "channel_id": channel_id, "channel_type": CHANNEL_MAP[channel_id]["type"], "images_enabled": channel_images_enabled(channel_id), "messaging_enabled": CHANNEL_MAP[channel_id]["type"] == "text" and channel_messaging_enabled(channel_id), "notification_sounds_enabled": channel_notifications_enabled(channel_id), "history": history(channel_id)})
     if event.get("type") != "send_message":
         return send_json(ws, {"type": "error", "code": "unsupported_event", "message": "unsupported event"})
     if event.get("room_id", ROOM_ID) != ROOM_ID:
@@ -576,7 +621,7 @@ def websocket_room(ws: object, room_id: str):
     client = {"user_id": claims["user_id"], "username": claims["username"], "channel_id": claims.get("channel_id", "general"), "recent": deque(), "send_lock": threading.Lock()}
     with clients_lock:
         clients[ws] = client
-    if not send_json(ws, {"type": "authenticated", "room_id": ROOM_ID, "channel_id": client["channel_id"], "channels": channel_payload(), "categories": category_payload(), "images_enabled": channel_images_enabled(str(client["channel_id"])), "messaging_enabled": messaging_enabled_for_client(client), "notification_sounds_enabled": channel_notifications_enabled(str(client["channel_id"])), "history": history(str(client["channel_id"]))}):
+    if not send_json(ws, {"type": "authenticated", "room_id": ROOM_ID, "channel_id": client["channel_id"], "channel_type": CHANNEL_MAP[str(client["channel_id"])]["type"], "channels": channel_payload(), "categories": category_payload(), "images_enabled": channel_images_enabled(str(client["channel_id"])), "messaging_enabled": messaging_enabled_for_client(client), "notification_sounds_enabled": channel_notifications_enabled(str(client["channel_id"])), "history": history(str(client["channel_id"]))}):
         remove_client(ws)
         return
     try:
@@ -595,6 +640,7 @@ def websocket_room(ws: object, room_id: str):
             if not isinstance(event, dict) or not handle_message(ws, client, event):
                 break
     finally:
+        leave_voice(ws, client)
         remove_client(ws)
 
 
