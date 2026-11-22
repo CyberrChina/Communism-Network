@@ -37,6 +37,9 @@ let audioContext;
 let voiceChannel = "";
 let peerId = crypto.randomUUID();
 let localStream;
+let reconnectTimer;
+let reconnectAttempts = 0;
+let pageVisible = !document.hidden;
 const peerConnections = new Map();
 const voiceMemberMap = new Map();
 const rendered = new Set();
@@ -249,6 +252,7 @@ function openSocket(connection) {
       notificationSoundsEnabled = payload.notification_sounds_enabled !== false;
       populateChannels(payload.channels || [], payload.categories || []);
       payload.history.forEach(renderMessage);
+      reconnectAttempts = 0;
       updateComposer();
       input.focus();
     } else if (payload.type === "new_message") {
@@ -293,12 +297,30 @@ function openSocket(connection) {
     }
   });
   socket.addEventListener("close", () => {
+    if (socket?.readyState !== WebSocket.OPEN) socket = undefined;
     input.disabled = true;
     sendButton.disabled = true;
     leaveVoice();
-    setStatus("Room connection closed. Refresh to reconnect.", true);
+    setStatus("Room connection paused. Reconnecting...", true);
+    scheduleReconnect();
   });
   socket.addEventListener("error", () => setStatus("Unable to reach the room server.", true));
+}
+
+function scheduleReconnect() {
+  if (reconnectTimer || !pageVisible || !roomId) return;
+  const delay = Math.min(30000, 1000 * (2 ** reconnectAttempts));
+  reconnectAttempts = Math.min(reconnectAttempts + 1, 5);
+  reconnectTimer = window.setTimeout(async () => {
+    reconnectTimer = undefined;
+    try {
+      const connection = await api(`/rooms/${encodeURIComponent(roomId)}/connection`);
+      openSocket(connection);
+    } catch (error) {
+      setStatus(`${error.message} Retrying...`, true);
+      scheduleReconnect();
+    }
+  }, delay);
 }
 
 function populateChannels(channels, categories) {
@@ -369,6 +391,7 @@ form.addEventListener("submit", (event) => {
 
 channelSelect.addEventListener("change", () => {
   if (voiceChannel) leaveVoice();
+  currentChannel = channelSelect.value;
   if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "switch_channel", channel_id: channelSelect.value }));
 });
 
@@ -389,6 +412,15 @@ imagePicker.addEventListener("change", async () => {
     setStatus("Connected directly to the room server.");
   } catch (error) { setStatus(error.message, true); }
   imagePicker.value = "";
+});
+
+document.addEventListener("visibilitychange", () => {
+  pageVisible = !document.hidden;
+  if (pageVisible && (!socket || socket.readyState !== WebSocket.OPEN)) scheduleReconnect();
+});
+window.addEventListener("pageshow", () => {
+  pageVisible = true;
+  if (!socket || socket.readyState !== WebSocket.OPEN) scheduleReconnect();
 });
 
 
