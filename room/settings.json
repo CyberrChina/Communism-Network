@@ -11,6 +11,17 @@
       "images_enabled": true,
       "messaging_enabled": true,
       "notification_sounds_enabled": true
+    },
+    "lounge": {
+      "name": "Lounge",
+      "type": "voice",
+      "images_enabled": false,
+      "messaging_enabled": false,
+      "notification_sounds_enabled": false
     }
-  }
+  },
+  "categories": [
+    {"id": "text", "name": "Text Channels", "channels": ["general", "media"]},
+    {"id": "voice", "name": "Voice Channels", "channels": ["lounge"]}
+  ]
 }

@@ -80,13 +80,19 @@ def configured_channels() -> list[dict[str, str]]:
     else:
         values = [{"id": "general", "name": "General"}]
     channels: list[dict[str, str]] = []
+    settings_channels = ROOM_SETTINGS.get("channels", {})
+    if isinstance(settings_channels, dict):
+        for channel_id, value in settings_channels.items():
+            if isinstance(value, dict) and value.get("name") and not any(item["id"] == channel_id for item in values if isinstance(item, dict)):
+                values.append({"id": channel_id, "name": value["name"], "type": value.get("type", "text")})
     for value in values if isinstance(values, list) else []:
         if not isinstance(value, dict):
             continue
         channel_id = str(value.get("id") or "").strip().lower()
         name = str(value.get("name") or "").strip()
-        if CHANNEL_ID_RE.fullmatch(channel_id) and name and len(name) <= 64:
-            channels.append({"id": channel_id, "name": name})
+        channel_type = str(value.get("type") or "text").strip().lower()
+        if CHANNEL_ID_RE.fullmatch(channel_id) and name and len(name) <= 64 and channel_type in {"text", "voice"}:
+            channels.append({"id": channel_id, "name": name, "type": channel_type})
     return channels or [{"id": "general", "name": "General"}]
 
 
@@ -124,6 +130,31 @@ def channel_notifications_enabled(channel_id: str) -> bool:
 
 def channel_payload() -> list[dict[str, object]]:
     return [dict(channel, images_enabled=channel_images_enabled(channel["id"]), messaging_enabled=channel_messaging_enabled(channel["id"]), notification_sounds_enabled=channel_notifications_enabled(channel["id"])) for channel in CHANNELS]
+
+
+def category_payload() -> list[dict[str, object]]:
+    configured = ROOM_SETTINGS.get("categories")
+    if not isinstance(configured, list):
+        configured = [
+            {"id": "text", "name": "Text Channels", "channels": [channel["id"] for channel in CHANNELS if channel["type"] == "text"]},
+            {"id": "voice", "name": "Voice Channels", "channels": [channel["id"] for channel in CHANNELS if channel["type"] == "voice"]},
+        ]
+    valid_ids = {channel["id"] for channel in CHANNELS}
+    categories = []
+    for value in configured:
+        if not isinstance(value, dict):
+            continue
+        category_id = str(value.get("id") or "").strip().lower()
+        name = str(value.get("name") or "").strip()
+        channel_ids = [str(item).strip().lower() for item in value.get("channels", []) if str(item).strip().lower() in valid_ids]
+        if category_id and name and channel_ids:
+            categories.append({"id": category_id, "name": name, "channels": channel_ids, "collapsed": bool(value.get("collapsed", False))})
+    return categories
+
+
+def messaging_enabled_for_client(client: dict[str, object]) -> bool:
+    channel_id = str(client.get("channel_id") or "general")
+    return CHANNEL_MAP.get(channel_id, {}).get("type") == "text" and channel_messaging_enabled(channel_id)
 
 
 def utc_now() -> str:
@@ -198,6 +229,7 @@ def registration_payload() -> dict[str, object]:
         "server_address": SERVER_ADDRESS,
         "ws_address": f"{WS_ADDRESS}/ws/{ROOM_ID}",
         "channels": channel_payload(),
+        "categories": category_payload(),
         "images_enabled": IMAGES_ENABLED,
         "protocol_version": PROTOCOL_VERSION,
     }
@@ -434,12 +466,14 @@ def handle_message(ws: object, client: dict[str, object], event: dict[str, objec
         if not channel_exists(channel_id):
             return send_json(ws, {"type": "error", "code": "unknown_channel", "message": "unknown channel"})
         client["channel_id"] = channel_id
-        return send_json(ws, {"type": "channel_changed", "channel_id": channel_id, "images_enabled": channel_images_enabled(channel_id), "messaging_enabled": channel_messaging_enabled(channel_id), "notification_sounds_enabled": channel_notifications_enabled(channel_id), "history": history(channel_id)})
+        return send_json(ws, {"type": "channel_changed", "channel_id": channel_id, "images_enabled": channel_images_enabled(channel_id), "messaging_enabled": CHANNEL_MAP[channel_id]["type"] == "text" and channel_messaging_enabled(channel_id), "notification_sounds_enabled": channel_notifications_enabled(channel_id), "history": history(channel_id)})
     if event.get("type") != "send_message":
         return send_json(ws, {"type": "error", "code": "unsupported_event", "message": "unsupported event"})
     if event.get("room_id", ROOM_ID) != ROOM_ID:
         return send_json(ws, {"type": "error", "code": "wrong_room", "message": "wrong room"})
     channel_id = str(client.get("channel_id") or "general")
+    if CHANNEL_MAP.get(channel_id, {}).get("type") != "text":
+        return send_json(ws, {"type": "error", "code": "not_text_channel", "message": "messaging is only available in text channels"})
     if not channel_messaging_enabled(channel_id):
         return send_json(ws, {"type": "error", "code": "messaging_disabled", "message": "messaging is disabled for this channel"})
     body = event.get("body")
@@ -467,14 +501,14 @@ def handle_message(ws: object, client: dict[str, object], event: dict[str, objec
 def health():
     with clients_lock:
         connected = len(clients)
-    return jsonify({"ok": True, "room_id": ROOM_ID, "room_name": ROOM_NAME, "protocol_version": PROTOCOL_VERSION, "connected_clients": connected, "ephemeral_message_key": EPHEMERAL_MESSAGE_KEY, "images_enabled": IMAGES_ENABLED, "image_retention_days": IMAGE_RETENTION_DAYS, "channels": channel_payload()})
+    return jsonify({"ok": True, "room_id": ROOM_ID, "room_name": ROOM_NAME, "protocol_version": PROTOCOL_VERSION, "connected_clients": connected, "ephemeral_message_key": EPHEMERAL_MESSAGE_KEY, "images_enabled": IMAGES_ENABLED, "image_retention_days": IMAGE_RETENTION_DAYS, "channels": channel_payload(), "categories": category_payload()})
 
 
 @app.get("/channels")
 def list_channels():
     if auth_from_request() is None:
         return jsonify({"ok": False, "error": "authentication required"}), 401
-    return jsonify({"ok": True, "channels": channel_payload(), "images_enabled": IMAGES_ENABLED})
+    return jsonify({"ok": True, "channels": channel_payload(), "categories": category_payload(), "images_enabled": IMAGES_ENABLED})
 
 
 @app.post("/media/upload/<channel_id>")
@@ -542,7 +576,7 @@ def websocket_room(ws: object, room_id: str):
     client = {"user_id": claims["user_id"], "username": claims["username"], "channel_id": claims.get("channel_id", "general"), "recent": deque(), "send_lock": threading.Lock()}
     with clients_lock:
         clients[ws] = client
-    if not send_json(ws, {"type": "authenticated", "room_id": ROOM_ID, "channel_id": client["channel_id"], "channels": channel_payload(), "images_enabled": channel_images_enabled(str(client["channel_id"])), "messaging_enabled": channel_messaging_enabled(str(client["channel_id"])), "notification_sounds_enabled": channel_notifications_enabled(str(client["channel_id"])), "history": history(str(client["channel_id"]))}):
+    if not send_json(ws, {"type": "authenticated", "room_id": ROOM_ID, "channel_id": client["channel_id"], "channels": channel_payload(), "categories": category_payload(), "images_enabled": channel_images_enabled(str(client["channel_id"])), "messaging_enabled": messaging_enabled_for_client(client), "notification_sounds_enabled": channel_notifications_enabled(str(client["channel_id"])), "history": history(str(client["channel_id"]))}):
         remove_client(ws)
         return
     try:
