@@ -1,8 +1,8 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Room | Communism Network</title><link rel="stylesheet" href="app.css?v=20261122-voice-webrtc"></head>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Room | Communism Network</title><link rel="stylesheet" href="app.css?v=20261122-voice-members"></head>
 <body><header class="shell topbar"><a class="brand" href="index.html"><span class="brand-mark">✦</span> Communism Network</a><nav class="nav"><a href="index.html">Home</a><a href="discover.html">Discover</a><button class="button ghost small" data-logout>Sign in</button></nav></header>
 <main class="shell app-main room-layout"><section class="dashboard-head"><div><span class="eyebrow">Direct room connection</span><h1 id="room-title">Connecting...</h1><p id="connection-status">Requesting an authorized room ticket.</p></div><a class="button ghost small" href="index.html">Back home</a></section>
-<section class="chat-panel"><div class="chat-workspace"><aside class="channel-sidebar"><div class="channel-heading"><span>Channels</span><span class="channel-count" id="channel-count">0</span></div><nav id="channel-tabs" class="channel-tabs" aria-label="Room channels"></nav><select id="channel-select" class="sr-only" disabled aria-hidden="true"></select></aside><div class="chat-column"><div id="message-list" class="message-list" aria-live="polite"><div class="empty">Loading encrypted room history...</div></div><form id="message-form" class="message-form"><label id="image-picker-label" class="media-button" hidden title="Attach an image"><span aria-hidden="true">+</span><span class="sr-only">Attach image</span><input id="image-picker" type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden></label><label class="sr-only" for="message-input">Message</label><textarea id="message-input" rows="2" maxlength="2000" placeholder="Write a message..." disabled></textarea><button id="sound-toggle" class="sound-button" type="button" title="Toggle notification sounds">Sound on</button><button id="voice-toggle" class="voice-button" type="button" hidden>Join voice</button><button class="button primary" type="submit" disabled>Send</button></form></div></div></section></main>
+<section class="chat-panel"><div class="chat-workspace"><aside class="channel-sidebar"><div class="channel-heading"><span>Channels</span><span class="channel-count" id="channel-count">0</span></div><nav id="channel-tabs" class="channel-tabs" aria-label="Room channels"></nav><select id="channel-select" class="sr-only" disabled aria-hidden="true"></select></aside><div class="chat-column"><section id="voice-panel" class="voice-panel" hidden><div class="voice-panel-head"><div><span class="voice-kicker">Voice channel</span><h2 id="voice-channel-name">Lounge</h2><p id="voice-status">Join to start talking.</p></div><button id="voice-toggle" class="voice-button" type="button">Join voice</button></div><div id="voice-members" class="voice-members" aria-live="polite"></div></section><div id="message-list" class="message-list" aria-live="polite"><div class="empty">Loading encrypted room history...</div></div><form id="message-form" class="message-form"><label id="image-picker-label" class="media-button" hidden title="Attach an image"><span aria-hidden="true">+</span><span class="sr-only">Attach image</span><input id="image-picker" type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden></label><label class="sr-only" for="message-input">Message</label><textarea id="message-input" rows="2" maxlength="2000" placeholder="Write a message..." disabled></textarea><button id="sound-toggle" class="sound-button" type="button" title="Toggle notification sounds">Sound on</button><button class="button primary" type="submit" disabled>Send</button></form></div></div></section></main>
 <script>
 const API_BASE = window.NETWORK_API_BASE || "/api";
 const roomId = new URLSearchParams(window.location.search).get("room");
@@ -11,7 +11,7 @@ const roomTitle = document.querySelector("#room-title");
 const messageList = document.querySelector("#message-list");
 const form = document.querySelector("#message-form");
 const input = document.querySelector("#message-input");
-const sendButton = form.querySelector("button");
+const sendButton = form.querySelector('button[type="submit"]');
 const channelSelect = document.querySelector("#channel-select");
 const imagePicker = document.querySelector("#image-picker");
 const imagePickerLabel = document.querySelector("#image-picker-label");
@@ -19,6 +19,10 @@ const channelTabs = document.querySelector("#channel-tabs");
 const channelCount = document.querySelector("#channel-count");
 const soundToggle = document.querySelector("#sound-toggle");
 const voiceToggle = document.querySelector("#voice-toggle");
+const voicePanel = document.querySelector("#voice-panel");
+const voiceMembers = document.querySelector("#voice-members");
+const voiceChannelName = document.querySelector("#voice-channel-name");
+const voiceStatus = document.querySelector("#voice-status");
 let socket;
 let csrfToken = "";
 let connectionTicket = "";
@@ -34,6 +38,7 @@ let voiceChannel = "";
 let peerId = crypto.randomUUID();
 let localStream;
 const peerConnections = new Map();
+const voiceMemberMap = new Map();
 const rendered = new Set();
 
 async function api(path, options = {}) {
@@ -54,13 +59,56 @@ function setStatus(message, error = false) {
 
 function updateComposer() {
   const voiceActive = currentChannelType === "voice";
+  messageList.hidden = voiceActive;
+  form.hidden = voiceActive;
+  voicePanel.hidden = !voiceActive;
   input.disabled = voiceActive || !messagingEnabled;
   sendButton.disabled = voiceActive || !messagingEnabled;
   input.placeholder = voiceActive ? "Voice channel" : messagingEnabled ? "Write a message..." : "Messaging is disabled in this channel";
   soundToggle.disabled = !notificationSoundsEnabled;
   soundToggle.textContent = soundEnabled && notificationSoundsEnabled ? "Sound on" : "Sound off";
-  voiceToggle.hidden = !voiceActive;
   voiceToggle.textContent = voiceChannel === currentChannel ? "Leave voice" : "Join voice";
+  voiceChannelName.textContent = channelTabs.querySelector(`[data-channel="${CSS.escape(currentChannel)}"]`)?.textContent || currentChannel;
+  voiceStatus.textContent = voiceChannel === currentChannel ? "Connected. Your microphone is live." : "Join to start talking.";
+}
+
+function renderVoiceMembers() {
+  voiceMembers.replaceChildren();
+  if (!voiceMemberMap.size) {
+    const empty = document.createElement("p");
+    empty.className = "voice-empty";
+    empty.textContent = "Nobody is here yet.";
+    voiceMembers.append(empty);
+    return;
+  }
+  for (const member of voiceMemberMap.values()) {
+    const item = document.createElement("article");
+    item.className = "voice-member";
+    const avatar = document.createElement("span");
+    avatar.className = "voice-avatar";
+    avatar.textContent = (member.username || "?").trim().slice(0, 1).toUpperCase();
+    const name = document.createElement("strong");
+    name.textContent = member.username || "Unknown";
+    item.append(avatar, name);
+    if (member.self) {
+      const you = document.createElement("span");
+      you.className = "voice-you";
+      you.textContent = "You";
+      item.append(you);
+    }
+    voiceMembers.append(item);
+  }
+}
+
+function addVoiceMember(id, username, self = false) {
+  if (!id) return;
+  voiceMemberMap.set(id, { username: username || "Unknown", self });
+  renderVoiceMembers();
+}
+
+function removeVoiceMember(id) {
+  voiceMemberMap.delete(id);
+  renderVoiceMembers();
 }
 
 function playNotification() {
@@ -116,6 +164,7 @@ async function joinVoice() {
     localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
     voiceChannel = currentChannel;
     socket.send(JSON.stringify({ type: "join_voice", channel_id: currentChannel, peer_id: peerId }));
+    addVoiceMember(peerId, "You", true);
     voiceToggle.textContent = "Leave voice";
     setStatus("Connected to voice channel.");
   } catch (error) { setStatus("Microphone access was denied or unavailable.", true); }
@@ -127,6 +176,8 @@ function leaveVoice() {
   localStream = undefined;
   for (const remotePeerId of peerConnections.keys()) closePeer(remotePeerId);
   voiceChannel = "";
+  voiceMemberMap.clear();
+  renderVoiceMembers();
   updateComposer();
 }
 
@@ -221,11 +272,20 @@ function openSocket(connection) {
       messageList.replaceChildren();
       (payload.history || []).forEach(renderMessage);
     } else if (payload.type === "voice_peers") {
-      payload.peers.forEach(remotePeerId => createPeer(remotePeerId, true));
+      payload.peers.forEach(remotePeer => {
+        const remotePeerId = typeof remotePeer === "string" ? remotePeer : remotePeer.peer_id;
+        if (!remotePeerId) return;
+        addVoiceMember(remotePeerId, typeof remotePeer === "string" ? "Unknown" : remotePeer.username);
+        createPeer(remotePeerId, true);
+      });
     } else if (payload.type === "voice_user_joined") {
-      if (payload.peer_id !== peerId && voiceChannel === payload.channel_id) createPeer(payload.peer_id, true);
+      if (payload.peer_id !== peerId && voiceChannel === payload.channel_id) {
+        addVoiceMember(payload.peer_id, payload.username);
+        createPeer(payload.peer_id, true);
+      }
     } else if (payload.type === "voice_user_left") {
       closePeer(payload.peer_id);
+      removeVoiceMember(payload.peer_id);
     } else if (payload.type === "voice_signal") {
       handleVoiceSignal(payload.from_peer_id, payload.signal).catch(() => setStatus("Voice connection negotiation failed.", true));
     } else if (payload.type === "error") {

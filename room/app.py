@@ -483,11 +483,11 @@ def handle_message(ws: object, client: dict[str, object], event: dict[str, objec
         leave_voice(ws, client)
         client["voice_channel"] = channel_id
         client["peer_id"] = peer_id
-        peers = [other_client["peer_id"] for _other_ws, other_client in voice_clients(channel_id, exclude=ws) if isinstance(other_client.get("peer_id"), str)]
+        peers = [{"peer_id": other_client["peer_id"], "username": other_client.get("username", "Unknown")} for _other_ws, other_client in voice_clients(channel_id, exclude=ws) if isinstance(other_client.get("peer_id"), str)]
         if not send_json(ws, {"type": "voice_peers", "channel_id": channel_id, "peers": peers}):
             return False
         for other_ws, _other_client in voice_clients(channel_id, exclude=ws):
-            if not send_json(other_ws, {"type": "voice_user_joined", "channel_id": channel_id, "peer_id": peer_id}):
+            if not send_json(other_ws, {"type": "voice_user_joined", "channel_id": channel_id, "peer_id": peer_id, "username": client.get("username", "Unknown")}):
                 remove_client(other_ws)
         return True
     if event.get("type") == "leave_voice":
