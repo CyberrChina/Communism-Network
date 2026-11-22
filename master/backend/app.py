@@ -173,6 +173,16 @@ def clean_room_payload(payload: dict[str, Any]):
     ws_address = str(payload.get("ws_address") or "").strip()
     room_id = str(payload.get("room_id") or "").strip()
     protocol_version = str(payload.get("protocol_version") or "1").strip()
+    raw_channels = payload.get("channels")
+    channels = []
+    if isinstance(raw_channels, list):
+        for value in raw_channels[:50]:
+            if not isinstance(value, dict):
+                continue
+            channel_id = str(value.get("id") or "").strip().lower()
+            channel_name = str(value.get("name") or "").strip()
+            if re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,31}", channel_id) and channel_name and len(channel_name) <= 64:
+                channels.append({"id": channel_id, "name": channel_name})
     if not room_name:
         return None, "missing room_name"
     if not server_address:
@@ -188,6 +198,8 @@ def clean_room_payload(payload: dict[str, Any]):
         "server_address": server_address,
         "ws_address": ws_address or server_address.replace("https://", "wss://").replace("http://", "ws://"),
         "protocol_version": protocol_version,
+        "channels": channels or [{"id": "general", "name": "General"}],
+        "images_enabled": bool(payload.get("images_enabled", True)),
         "last_heartbeat": utc_now(),
         "status": "online",
     }, None

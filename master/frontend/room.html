@@ -2,7 +2,7 @@
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Room | Communism Network</title><link rel="stylesheet" href="app.css"></head>
 <body><header class="shell topbar"><a class="brand" href="index.html"><span class="brand-mark">✦</span> Communism Network</a><nav class="nav"><a href="index.html">Home</a><a href="discover.html">Discover</a><button class="button ghost small" data-logout>Sign in</button></nav></header>
 <main class="shell app-main room-layout"><section class="dashboard-head"><div><span class="eyebrow">Direct room connection</span><h1 id="room-title">Connecting...</h1><p id="connection-status">Requesting an authorized room ticket.</p></div><a class="button ghost small" href="index.html">Back home</a></section>
-<section class="chat-panel"><div id="message-list" class="message-list" aria-live="polite"><div class="empty">Loading encrypted room history...</div></div><form id="message-form" class="message-form"><label class="sr-only" for="message-input">Message</label><textarea id="message-input" rows="2" maxlength="2000" placeholder="Write a message..." disabled></textarea><button class="button primary" type="submit" disabled>Send</button></form></section></main>
+<section class="chat-panel"><div class="room-tools"><label for="channel-select">Channel</label><select id="channel-select" disabled></select><label class="upload-toggle"><input id="images-toggle" type="checkbox" checked> Images</label><label id="image-picker-label" class="button ghost small" hidden>Attach image<input id="image-picker" type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden></label></div><div id="message-list" class="message-list" aria-live="polite"><div class="empty">Loading encrypted room history...</div></div><form id="message-form" class="message-form"><label class="sr-only" for="message-input">Message</label><textarea id="message-input" rows="2" maxlength="2000" placeholder="Write a message..." disabled></textarea><button class="button primary" type="submit" disabled>Send</button></form></section></main>
 <script>
 const API_BASE = window.NETWORK_API_BASE || "/api";
 const roomId = new URLSearchParams(window.location.search).get("room");
@@ -12,8 +12,16 @@ const messageList = document.querySelector("#message-list");
 const form = document.querySelector("#message-form");
 const input = document.querySelector("#message-input");
 const sendButton = form.querySelector("button");
+const channelSelect = document.querySelector("#channel-select");
+const imagePicker = document.querySelector("#image-picker");
+const imagePickerLabel = document.querySelector("#image-picker-label");
+const imagesToggle = document.querySelector("#images-toggle");
 let socket;
 let csrfToken = "";
+let connectionTicket = "";
+let roomOrigin = "";
+let currentChannel = "general";
+let imagesEnabled = false;
 const rendered = new Set();
 
 async function api(path, options = {}) {
@@ -40,18 +48,39 @@ function renderMessage(message) {
   const item = document.createElement("article");
   item.className = "message-item";
   const timestamp = new Date(message.sent_at).toLocaleString([], { dateStyle: "short", timeStyle: "short" });
-  item.innerHTML = '<div class="message-meta"><strong></strong><time></time></div><p></p>';
-  item.querySelector("strong").textContent = message.sender_name;
-  item.querySelector("time").textContent = timestamp;
-  item.querySelector("p").textContent = message.body;
+  const meta = document.createElement("div");
+  meta.className = "message-meta";
+  const sender = document.createElement("strong");
+  sender.textContent = message.sender_name;
+  const time = document.createElement("time");
+  time.textContent = timestamp;
+  meta.append(sender, time);
+  item.append(meta);
+  if (message.message_type === "image") {
+    const image = document.createElement("img");
+    image.className = "message-image";
+    image.alt = message.media_name || "Shared image";
+    image.loading = "lazy";
+    fetch(`${roomOrigin}/media/${encodeURIComponent(message.media_id)}`, { headers: { Authorization: `Bearer ${connectionTicket}` } })
+      .then(response => response.ok ? response.blob() : Promise.reject(new Error("image unavailable")))
+      .then(blob => { image.src = URL.createObjectURL(blob); })
+      .catch(() => { image.alt = "Image unavailable"; });
+    item.append(image);
+  } else {
+    const body = document.createElement("p");
+    body.textContent = message.body;
+    item.append(body);
+  }
   messageList.appendChild(item);
   messageList.scrollTop = messageList.scrollHeight;
 }
 
 function openSocket(connection) {
+  connectionTicket = connection.connection_ticket;
+  roomOrigin = connection.ws_address.replace(/^wss:/, "https:").replace(/^ws:/, "http:").replace(/\/ws\/[^/]+$/, "");
   socket = new WebSocket(connection.ws_address);
   socket.addEventListener("open", () => {
-    socket.send(JSON.stringify({ type: "authenticate", ticket: connection.connection_ticket }));
+    socket.send(JSON.stringify({ type: "authenticate", ticket: connectionTicket, channel_id: currentChannel }));
     setStatus("Connecting directly to the room server...");
   });
   socket.addEventListener("message", (event) => {
@@ -59,12 +88,21 @@ function openSocket(connection) {
     if (payload.type === "authenticated") {
       roomTitle.textContent = connection.room_name;
       setStatus("Connected directly to the room server.");
+      currentChannel = payload.channel_id || currentChannel;
+      imagesEnabled = payload.images_enabled === true;
+      populateChannels(payload.channels || []);
       payload.history.forEach(renderMessage);
       input.disabled = false;
       sendButton.disabled = false;
       input.focus();
     } else if (payload.type === "new_message") {
       renderMessage(payload.message);
+    } else if (payload.type === "channel_changed") {
+      currentChannel = payload.channel_id;
+      channelSelect.value = currentChannel;
+      rendered.clear();
+      messageList.replaceChildren();
+      (payload.history || []).forEach(renderMessage);
     } else if (payload.type === "error") {
       setStatus(payload.message || "Room connection failed.", true);
     }
@@ -77,6 +115,21 @@ function openSocket(connection) {
   socket.addEventListener("error", () => setStatus("Unable to reach the room server.", true));
 }
 
+function populateChannels(channels) {
+  channelSelect.replaceChildren();
+  channels.forEach(channel => {
+    const option = document.createElement("option");
+    option.value = channel.id;
+    option.textContent = channel.name;
+    option.selected = channel.id === currentChannel;
+    channelSelect.append(option);
+  });
+  channelSelect.disabled = false;
+  imagePickerLabel.hidden = !imagesEnabled;
+  imagesToggle.checked = imagesEnabled;
+  imagesToggle.disabled = !imagesEnabled;
+}
+
 form.addEventListener("submit", (event) => {
   event.preventDefault();
   const body = input.value.trim();
@@ -84,6 +137,31 @@ form.addEventListener("submit", (event) => {
   const clientMessageId = crypto.randomUUID();
   socket.send(JSON.stringify({ type: "send_message", room_id: roomId, client_message_id: clientMessageId, body }));
   input.value = "";
+});
+
+channelSelect.addEventListener("change", () => {
+  if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "switch_channel", channel_id: channelSelect.value }));
+});
+
+imagePicker.addEventListener("change", async () => {
+  const file = imagePicker.files[0];
+  if (!file || !imagesEnabled || !socket || socket.readyState !== WebSocket.OPEN) return;
+  const formData = new FormData();
+  formData.append("image", file);
+  formData.append("client_message_id", crypto.randomUUID());
+  try {
+    setStatus("Uploading image...");
+    const response = await fetch(`${roomOrigin}/media/upload/${encodeURIComponent(currentChannel)}`, { method: "POST", headers: { Authorization: `Bearer ${connectionTicket}` }, body: formData });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || "Image upload failed.");
+    if (data.message) renderMessage(data.message);
+    setStatus("Connected directly to the room server.");
+  } catch (error) { setStatus(error.message, true); }
+  imagePicker.value = "";
+});
+
+imagesToggle.addEventListener("change", () => {
+  imagePickerLabel.hidden = !imagesEnabled || !imagesToggle.checked;
 });
 
 (async () => {
