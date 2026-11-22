@@ -50,7 +50,12 @@ Room owners control media server-side in `settings.json` (the default is
   "notification_sounds_enabled": true,
   "channels": {
     "general": {"images_enabled": true, "messaging_enabled": true},
-    "media": {"images_enabled": false, "messaging_enabled": true}
+    "media": {"images_enabled": false, "messaging_enabled": true},
+    "lounge": {"name": "Lounge", "type": "voice", "messaging_enabled": false}
+  },
+  "categories": [
+    {"id": "text", "name": "Text Channels", "channels": ["general", "media"]},
+    {"id": "voice", "name": "Voice Channels", "channels": ["lounge"]}
   }
 }
 ```
@@ -62,6 +67,11 @@ upload button for channels enabled by the room server.
 Set a channel's `messaging_enabled` to `false` to make it read-only. Notification
 sounds are enabled globally by `notification_sounds_enabled` and can also be
 overridden per channel. Users can mute sounds locally in the room composer.
+
+Channels may use `type: "text"` or `type: "voice"`. Voice channels are exposed
+as separate category entries and are read-only to the text-message protocol;
+voice media transport still needs a WebRTC signaling layer before users can
+talk in them.
 
 ## Run
 
