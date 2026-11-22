@@ -1,4 +1,4 @@
-const API_BASE = window.NETWORK_API_BASE || "../backend/api";
+const API_BASE = window.NETWORK_API_BASE || "/api";
 let csrfToken = "";
 
 async function api(path, options = {}) {
@@ -111,10 +111,20 @@ async function loadDiscoverRooms() {
   }
 }
 
-async function bindLogout() {
+async function bindAuthAction() {
   const button = document.querySelector("[data-logout]");
   if (!button) return;
-  button.addEventListener("click", async () => { await api("/auth/logout", { method: "POST" }); window.location.href = "login.html"; });
+  try {
+    await api("/auth/me");
+    button.textContent = "Log out";
+    button.addEventListener("click", async () => {
+      await api("/auth/logout", { method: "POST" });
+      window.location.href = "login.html";
+    });
+  } catch {
+    button.textContent = "Sign in";
+    button.addEventListener("click", () => { window.location.href = "login.html"; });
+  }
 }
 
 function showToast(message) {
@@ -126,7 +136,6 @@ function showToast(message) {
 }
 
 bindAuthForm();
-bindLogout();
-api("/auth/me").catch(() => {});
+bindAuthAction();
 loadJoinedRooms();
 loadDiscoverRooms();

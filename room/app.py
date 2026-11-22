@@ -123,7 +123,15 @@ def register_with_master(retries: int = 3) -> bool:
 def heartbeat_loop() -> None:
     while True:
         time.sleep(30)
-        master_request("/api/rooms/heartbeat", {"room_id": ROOM_ID})
+        body, status = master_request("/api/rooms/heartbeat", {"room_id": ROOM_ID})
+        if not (200 <= status < 300 and body.get("ok")):
+            register_with_master(retries=3)
+
+
+def runtime_loop() -> None:
+    while not register_with_master(retries=3):
+        time.sleep(30)
+    heartbeat_loop()
 
 
 def message_from_row(row: sqlite3.Row) -> dict[str, object]:
@@ -296,6 +304,9 @@ def websocket_room(ws: object, room_id: str):
 
 
 init_db()
+
+if os.environ.get("ROOM_AUTOSTART_REGISTRATION") == "1":
+    threading.Thread(target=runtime_loop, name="master-registration", daemon=True).start()
 
 
 if __name__ == "__main__":

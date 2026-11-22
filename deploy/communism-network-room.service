@@ -1,0 +1,19 @@
+[Unit]
+Description=Communism Network direct room server
+After=network-online.target communism-network-master.service
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=openclaw
+Group=openclaw
+WorkingDirectory=/home/openclaw/.openclaw/workspace
+EnvironmentFile=/etc/communism-network/room.env
+ExecStart=/opt/communism-network/venv/bin/gunicorn --workers 1 --threads 100 --timeout 0 --bind 127.0.0.1:5001 --access-logfile - --error-logfile - room.app:app
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
