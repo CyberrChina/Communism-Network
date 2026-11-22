@@ -47,9 +47,10 @@ Room owners control media server-side in `settings.json` (the default is
 ```json
 {
   "images_enabled": true,
+  "notification_sounds_enabled": true,
   "channels": {
-    "general": {"images_enabled": true},
-    "media": {"images_enabled": false}
+    "general": {"images_enabled": true, "messaging_enabled": true},
+    "media": {"images_enabled": false, "messaging_enabled": true}
   }
 }
 ```
@@ -57,6 +58,10 @@ Room owners control media server-side in `settings.json` (the default is
 The global setting must be enabled and each channel may independently allow or
 deny images. The browser has no user-controlled media toggle; it only shows the
 upload button for channels enabled by the room server.
+
+Set a channel's `messaging_enabled` to `false` to make it read-only. Notification
+sounds are enabled globally by `notification_sounds_enabled` and can also be
+overridden per channel. Users can mute sounds locally in the room composer.
 
 ## Run
 

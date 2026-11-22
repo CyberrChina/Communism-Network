@@ -1,11 +1,16 @@
 {
   "images_enabled": true,
+  "notification_sounds_enabled": true,
   "channels": {
     "general": {
-      "images_enabled": true
+      "images_enabled": true,
+      "messaging_enabled": true,
+      "notification_sounds_enabled": true
     },
     "media": {
-      "images_enabled": true
+      "images_enabled": true,
+      "messaging_enabled": true,
+      "notification_sounds_enabled": true
     }
   }
 }

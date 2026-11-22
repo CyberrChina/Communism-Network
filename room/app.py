@@ -103,8 +103,27 @@ def channel_images_enabled(channel_id: str) -> bool:
     return IMAGES_ENABLED
 
 
+def channel_messaging_enabled(channel_id: str) -> bool:
+    channel_settings = ROOM_SETTINGS.get("channels", {})
+    if isinstance(channel_settings, dict):
+        value = channel_settings.get(channel_id)
+        if isinstance(value, dict) and "messaging_enabled" in value:
+            return bool(value["messaging_enabled"])
+    return True
+
+
+def channel_notifications_enabled(channel_id: str) -> bool:
+    enabled = bool(ROOM_SETTINGS.get("notification_sounds_enabled", True))
+    channel_settings = ROOM_SETTINGS.get("channels", {})
+    if isinstance(channel_settings, dict):
+        value = channel_settings.get(channel_id)
+        if isinstance(value, dict) and "notification_sounds_enabled" in value:
+            enabled = bool(value["notification_sounds_enabled"])
+    return enabled
+
+
 def channel_payload() -> list[dict[str, object]]:
-    return [dict(channel, images_enabled=channel_images_enabled(channel["id"])) for channel in CHANNELS]
+    return [dict(channel, images_enabled=channel_images_enabled(channel["id"]), messaging_enabled=channel_messaging_enabled(channel["id"]), notification_sounds_enabled=channel_notifications_enabled(channel["id"])) for channel in CHANNELS]
 
 
 def utc_now() -> str:
@@ -415,11 +434,14 @@ def handle_message(ws: object, client: dict[str, object], event: dict[str, objec
         if not channel_exists(channel_id):
             return send_json(ws, {"type": "error", "code": "unknown_channel", "message": "unknown channel"})
         client["channel_id"] = channel_id
-        return send_json(ws, {"type": "channel_changed", "channel_id": channel_id, "images_enabled": channel_images_enabled(channel_id), "history": history(channel_id)})
+        return send_json(ws, {"type": "channel_changed", "channel_id": channel_id, "images_enabled": channel_images_enabled(channel_id), "messaging_enabled": channel_messaging_enabled(channel_id), "notification_sounds_enabled": channel_notifications_enabled(channel_id), "history": history(channel_id)})
     if event.get("type") != "send_message":
         return send_json(ws, {"type": "error", "code": "unsupported_event", "message": "unsupported event"})
     if event.get("room_id", ROOM_ID) != ROOM_ID:
         return send_json(ws, {"type": "error", "code": "wrong_room", "message": "wrong room"})
+    channel_id = str(client.get("channel_id") or "general")
+    if not channel_messaging_enabled(channel_id):
+        return send_json(ws, {"type": "error", "code": "messaging_disabled", "message": "messaging is disabled for this channel"})
     body = event.get("body")
     client_message_id = event.get("client_message_id")
     if not isinstance(body, str) or not body.strip() or len(body) > MAX_MESSAGE_LENGTH:
@@ -433,7 +455,6 @@ def handle_message(ws: object, client: dict[str, object], event: dict[str, objec
     if len(recent) >= RATE_LIMIT_COUNT:
         return send_json(ws, {"type": "error", "code": "rate_limited", "message": "too many messages"})
     recent.append(now)
-    channel_id = str(client.get("channel_id") or "general")
     message, created = persist_message(int(client["user_id"]), str(client["username"]), client_message_id, body.strip(), channel_id)
     if not send_json(ws, {"type": "message_ack", "client_message_id": client_message_id, "created": created, "message": message}):
         return False
@@ -521,7 +542,7 @@ def websocket_room(ws: object, room_id: str):
     client = {"user_id": claims["user_id"], "username": claims["username"], "channel_id": claims.get("channel_id", "general"), "recent": deque(), "send_lock": threading.Lock()}
     with clients_lock:
         clients[ws] = client
-    if not send_json(ws, {"type": "authenticated", "room_id": ROOM_ID, "channel_id": client["channel_id"], "channels": channel_payload(), "images_enabled": channel_images_enabled(str(client["channel_id"])), "history": history(str(client["channel_id"]))}):
+    if not send_json(ws, {"type": "authenticated", "room_id": ROOM_ID, "channel_id": client["channel_id"], "channels": channel_payload(), "images_enabled": channel_images_enabled(str(client["channel_id"])), "messaging_enabled": channel_messaging_enabled(str(client["channel_id"])), "notification_sounds_enabled": channel_notifications_enabled(str(client["channel_id"])), "history": history(str(client["channel_id"]))}):
         remove_client(ws)
         return
     try:

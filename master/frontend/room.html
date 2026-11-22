@@ -1,8 +1,8 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Room | Communism Network</title><link rel="stylesheet" href="app.css?v=20261122-room-layout"></head>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Room | Communism Network</title><link rel="stylesheet" href="app.css?v=20261122-room-settings"></head>
 <body><header class="shell topbar"><a class="brand" href="index.html"><span class="brand-mark">✦</span> Communism Network</a><nav class="nav"><a href="index.html">Home</a><a href="discover.html">Discover</a><button class="button ghost small" data-logout>Sign in</button></nav></header>
 <main class="shell app-main room-layout"><section class="dashboard-head"><div><span class="eyebrow">Direct room connection</span><h1 id="room-title">Connecting...</h1><p id="connection-status">Requesting an authorized room ticket.</p></div><a class="button ghost small" href="index.html">Back home</a></section>
-<section class="chat-panel"><div class="chat-workspace"><aside class="channel-sidebar"><div class="channel-heading"><span>Channels</span><span class="channel-count" id="channel-count">0</span></div><nav id="channel-tabs" class="channel-tabs" aria-label="Room channels"></nav><select id="channel-select" class="sr-only" disabled aria-hidden="true"></select></aside><div class="chat-column"><div id="message-list" class="message-list" aria-live="polite"><div class="empty">Loading encrypted room history...</div></div><form id="message-form" class="message-form"><label id="image-picker-label" class="media-button" hidden title="Attach an image"><span aria-hidden="true">+</span><span class="sr-only">Attach image</span><input id="image-picker" type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden></label><label class="sr-only" for="message-input">Message</label><textarea id="message-input" rows="2" maxlength="2000" placeholder="Write a message..." disabled></textarea><button class="button primary" type="submit" disabled>Send</button></form></div></div></section></main>
+<section class="chat-panel"><div class="chat-workspace"><aside class="channel-sidebar"><div class="channel-heading"><span>Channels</span><span class="channel-count" id="channel-count">0</span></div><nav id="channel-tabs" class="channel-tabs" aria-label="Room channels"></nav><select id="channel-select" class="sr-only" disabled aria-hidden="true"></select></aside><div class="chat-column"><div id="message-list" class="message-list" aria-live="polite"><div class="empty">Loading encrypted room history...</div></div><form id="message-form" class="message-form"><label id="image-picker-label" class="media-button" hidden title="Attach an image"><span aria-hidden="true">+</span><span class="sr-only">Attach image</span><input id="image-picker" type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden></label><label class="sr-only" for="message-input">Message</label><textarea id="message-input" rows="2" maxlength="2000" placeholder="Write a message..." disabled></textarea><button id="sound-toggle" class="sound-button" type="button" title="Toggle notification sounds">Sound on</button><button class="button primary" type="submit" disabled>Send</button></form></div></div></section></main>
 <script>
 const API_BASE = window.NETWORK_API_BASE || "/api";
 const roomId = new URLSearchParams(window.location.search).get("room");
@@ -17,12 +17,17 @@ const imagePicker = document.querySelector("#image-picker");
 const imagePickerLabel = document.querySelector("#image-picker-label");
 const channelTabs = document.querySelector("#channel-tabs");
 const channelCount = document.querySelector("#channel-count");
+const soundToggle = document.querySelector("#sound-toggle");
 let socket;
 let csrfToken = "";
 let connectionTicket = "";
 let roomOrigin = "";
 let currentChannel = "general";
 let imagesEnabled = false;
+let messagingEnabled = true;
+let notificationSoundsEnabled = true;
+let soundEnabled = true;
+let audioContext;
 const rendered = new Set();
 
 async function api(path, options = {}) {
@@ -39,6 +44,30 @@ async function api(path, options = {}) {
 function setStatus(message, error = false) {
   statusText.textContent = message;
   statusText.dataset.error = error ? "true" : "false";
+}
+
+function updateComposer() {
+  input.disabled = !messagingEnabled;
+  sendButton.disabled = !messagingEnabled;
+  input.placeholder = messagingEnabled ? "Write a message..." : "Messaging is disabled in this channel";
+  soundToggle.disabled = !notificationSoundsEnabled;
+  soundToggle.textContent = soundEnabled && notificationSoundsEnabled ? "Sound on" : "Sound off";
+}
+
+function playNotification() {
+  if (!soundEnabled || !notificationSoundsEnabled) return;
+  try {
+    audioContext ||= new AudioContext();
+    const oscillator = audioContext.createOscillator();
+    const gain = audioContext.createGain();
+    oscillator.frequency.setValueAtTime(740, audioContext.currentTime);
+    oscillator.frequency.exponentialRampToValueAtTime(520, audioContext.currentTime + 0.12);
+    gain.gain.setValueAtTime(0.08, audioContext.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + 0.14);
+    oscillator.connect(gain).connect(audioContext.destination);
+    oscillator.start();
+    oscillator.stop(audioContext.currentTime + 0.14);
+  } catch (_) { /* Browser audio may require a user gesture. */ }
 }
 
 function renderMessage(message) {
@@ -91,18 +120,25 @@ function openSocket(connection) {
       setStatus("Connected directly to the room server.");
       currentChannel = payload.channel_id || currentChannel;
       imagesEnabled = payload.images_enabled === true;
+      messagingEnabled = payload.messaging_enabled !== false;
+      notificationSoundsEnabled = payload.notification_sounds_enabled !== false;
       populateChannels(payload.channels || []);
       payload.history.forEach(renderMessage);
-      input.disabled = false;
-      sendButton.disabled = false;
+      updateComposer();
       input.focus();
     } else if (payload.type === "new_message") {
-      renderMessage(payload.message);
+      if (payload.message.channel_id === currentChannel) {
+        renderMessage(payload.message);
+        playNotification();
+      }
     } else if (payload.type === "channel_changed") {
       currentChannel = payload.channel_id;
       channelSelect.value = currentChannel;
       imagesEnabled = payload.images_enabled === true;
+      messagingEnabled = payload.messaging_enabled !== false;
+      notificationSoundsEnabled = payload.notification_sounds_enabled !== false;
       imagePickerLabel.hidden = !imagesEnabled;
+      updateComposer();
       channelTabs.querySelectorAll(".channel-tab").forEach(tab => tab.setAttribute("aria-pressed", tab.dataset.channel === currentChannel ? "true" : "false"));
       rendered.clear();
       messageList.replaceChildren();
@@ -133,6 +169,7 @@ function populateChannels(channels) {
     tab.type = "button";
     tab.className = "channel-tab";
     tab.dataset.channel = channel.id;
+    tab.title = channel.messaging_enabled === false ? "Read-only channel" : "Open channel";
     tab.textContent = channel.name;
     tab.setAttribute("aria-pressed", channel.id === currentChannel ? "true" : "false");
     tab.addEventListener("click", () => {
@@ -144,6 +181,11 @@ function populateChannels(channels) {
   channelSelect.disabled = false;
   imagePickerLabel.hidden = !imagesEnabled;
 }
+
+soundToggle.addEventListener("click", () => {
+  soundEnabled = !soundEnabled;
+  updateComposer();
+});
 
 form.addEventListener("submit", (event) => {
   event.preventDefault();
