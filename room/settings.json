@@ -1,0 +1,11 @@
+{
+  "images_enabled": true,
+  "channels": {
+    "general": {
+      "images_enabled": true
+    },
+    "media": {
+      "images_enabled": true
+    }
+  }
+}

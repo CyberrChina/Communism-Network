@@ -22,6 +22,7 @@ ROOM_IMAGES_ENABLED=1
 ROOM_MAX_IMAGE_BYTES=10485760
 ROOM_IMAGE_RETENTION_DAYS=14
 ROOM_MEDIA_CLEANUP_INTERVAL=3600
+ROOM_SETTINGS_FILE=/path/to/settings.json
 ```
 
 Generate a Fernet key with:
@@ -39,6 +40,23 @@ The cleanup loop removes image files, metadata, and message entries older than
 `ROOM_IMAGE_RETENTION_DAYS` (14 days by default). Set `ROOM_IMAGES_ENABLED=0`
 to disable image uploads for a room; the frontend hides its image controls.
 Keep `ROOM_MESSAGE_KEY` backed up and rotate it deliberately.
+
+Room owners control media server-side in `settings.json` (the default is
+`room/settings.json`):
+
+```json
+{
+  "images_enabled": true,
+  "channels": {
+    "general": {"images_enabled": true},
+    "media": {"images_enabled": false}
+  }
+}
+```
+
+The global setting must be enabled and each channel may independently allow or
+deny images. The browser has no user-controlled media toggle; it only shows the
+upload button for channels enabled by the room server.
 
 ## Run
 

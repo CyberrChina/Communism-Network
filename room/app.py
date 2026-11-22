@@ -35,9 +35,9 @@ PROTOCOL_VERSION = "1"
 MAX_MESSAGE_LENGTH = int(os.environ.get("ROOM_MAX_MESSAGE_LENGTH", "2000"))
 MAX_HISTORY = int(os.environ.get("ROOM_HISTORY_PAGE_SIZE", "100"))
 DATABASE_PATH = Path(os.environ.get("ROOM_DATABASE_PATH", Path(__file__).with_name("messages.sqlite3")))
+SETTINGS_PATH = Path(os.environ.get("ROOM_SETTINGS_FILE", Path(__file__).with_name("settings.json")))
 MAX_IMAGE_BYTES = int(os.environ.get("ROOM_MAX_IMAGE_BYTES", str(10 * 1024 * 1024)))
 IMAGE_RETENTION_DAYS = int(os.environ.get("ROOM_IMAGE_RETENTION_DAYS", "14"))
-IMAGES_ENABLED = os.environ.get("ROOM_IMAGES_ENABLED", "1") != "0"
 MEDIA_DIRECTORY = Path(os.environ.get("ROOM_MEDIA_DIRECTORY", str(DATABASE_PATH.parent / "media")))
 MEDIA_CLEANUP_INTERVAL = int(os.environ.get("ROOM_MEDIA_CLEANUP_INTERVAL", "3600"))
 RATE_LIMIT_COUNT = int(os.environ.get("ROOM_MESSAGE_RATE_COUNT", "10"))
@@ -55,6 +55,19 @@ clients: dict[object, dict[str, object]] = {}
 clients_lock = threading.Lock()
 CHANNEL_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 ALLOWED_IMAGE_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
+
+
+def load_settings() -> dict[str, object]:
+    try:
+        settings = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        settings = {}
+    return settings if isinstance(settings, dict) else {}
+
+
+ROOM_SETTINGS = load_settings()
+_env_images_enabled = os.environ.get("ROOM_IMAGES_ENABLED")
+IMAGES_ENABLED = bool(ROOM_SETTINGS.get("images_enabled", _env_images_enabled != "0" if _env_images_enabled is not None else True))
 
 
 def configured_channels() -> list[dict[str, str]]:
@@ -79,6 +92,19 @@ def configured_channels() -> list[dict[str, str]]:
 
 CHANNELS = configured_channels()
 CHANNEL_MAP = {channel["id"]: channel for channel in CHANNELS}
+
+
+def channel_images_enabled(channel_id: str) -> bool:
+    channel_settings = ROOM_SETTINGS.get("channels", {})
+    if isinstance(channel_settings, dict):
+        value = channel_settings.get(channel_id)
+        if isinstance(value, dict) and "images_enabled" in value:
+            return IMAGES_ENABLED and bool(value["images_enabled"])
+    return IMAGES_ENABLED
+
+
+def channel_payload() -> list[dict[str, object]]:
+    return [dict(channel, images_enabled=channel_images_enabled(channel["id"])) for channel in CHANNELS]
 
 
 def utc_now() -> str:
@@ -152,7 +178,7 @@ def registration_payload() -> dict[str, object]:
         "display_name": ROOM_NAME,
         "server_address": SERVER_ADDRESS,
         "ws_address": f"{WS_ADDRESS}/ws/{ROOM_ID}",
-        "channels": CHANNELS,
+        "channels": channel_payload(),
         "images_enabled": IMAGES_ENABLED,
         "protocol_version": PROTOCOL_VERSION,
     }
@@ -389,7 +415,7 @@ def handle_message(ws: object, client: dict[str, object], event: dict[str, objec
         if not channel_exists(channel_id):
             return send_json(ws, {"type": "error", "code": "unknown_channel", "message": "unknown channel"})
         client["channel_id"] = channel_id
-        return send_json(ws, {"type": "channel_changed", "channel_id": channel_id, "history": history(channel_id)})
+        return send_json(ws, {"type": "channel_changed", "channel_id": channel_id, "images_enabled": channel_images_enabled(channel_id), "history": history(channel_id)})
     if event.get("type") != "send_message":
         return send_json(ws, {"type": "error", "code": "unsupported_event", "message": "unsupported event"})
     if event.get("room_id", ROOM_ID) != ROOM_ID:
@@ -420,14 +446,14 @@ def handle_message(ws: object, client: dict[str, object], event: dict[str, objec
 def health():
     with clients_lock:
         connected = len(clients)
-    return jsonify({"ok": True, "room_id": ROOM_ID, "room_name": ROOM_NAME, "protocol_version": PROTOCOL_VERSION, "connected_clients": connected, "ephemeral_message_key": EPHEMERAL_MESSAGE_KEY, "images_enabled": IMAGES_ENABLED, "image_retention_days": IMAGE_RETENTION_DAYS, "channels": CHANNELS})
+    return jsonify({"ok": True, "room_id": ROOM_ID, "room_name": ROOM_NAME, "protocol_version": PROTOCOL_VERSION, "connected_clients": connected, "ephemeral_message_key": EPHEMERAL_MESSAGE_KEY, "images_enabled": IMAGES_ENABLED, "image_retention_days": IMAGE_RETENTION_DAYS, "channels": channel_payload()})
 
 
 @app.get("/channels")
 def list_channels():
     if auth_from_request() is None:
         return jsonify({"ok": False, "error": "authentication required"}), 401
-    return jsonify({"ok": True, "channels": CHANNELS, "images_enabled": IMAGES_ENABLED})
+    return jsonify({"ok": True, "channels": channel_payload(), "images_enabled": IMAGES_ENABLED})
 
 
 @app.post("/media/upload/<channel_id>")
@@ -440,6 +466,8 @@ def upload_media(channel_id: str):
         return jsonify({"ok": False, "error": "image uploads are disabled"}), 403
     if not channel_exists(channel_id):
         return jsonify({"ok": False, "error": "unknown channel"}), 404
+    if not channel_images_enabled(channel_id):
+        return jsonify({"ok": False, "error": "image uploads are disabled for this channel"}), 403
     upload = request.files.get("image")
     client_message_id = request.form.get("client_message_id", "")
     if upload is None or not upload.filename:
@@ -493,7 +521,7 @@ def websocket_room(ws: object, room_id: str):
     client = {"user_id": claims["user_id"], "username": claims["username"], "channel_id": claims.get("channel_id", "general"), "recent": deque(), "send_lock": threading.Lock()}
     with clients_lock:
         clients[ws] = client
-    if not send_json(ws, {"type": "authenticated", "room_id": ROOM_ID, "channel_id": client["channel_id"], "channels": CHANNELS, "images_enabled": IMAGES_ENABLED, "history": history(str(client["channel_id"]))}):
+    if not send_json(ws, {"type": "authenticated", "room_id": ROOM_ID, "channel_id": client["channel_id"], "channels": channel_payload(), "images_enabled": channel_images_enabled(str(client["channel_id"])), "history": history(str(client["channel_id"]))}):
         remove_client(ws)
         return
     try:
