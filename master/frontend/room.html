@@ -1,10 +1,10 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Room | Communism Network</title><link rel="stylesheet" href="app.css"></head>
-<body><header class="shell topbar"><a class="brand" href="index.html"><span class="brand-mark">✦</span> Communism Network</a><nav class="nav"><a href="index.html">Home</a><a href="discover.html">Discover</a><button class="button ghost small" data-logout>Log out</button></nav></header>
+<body><header class="shell topbar"><a class="brand" href="index.html"><span class="brand-mark">✦</span> Communism Network</a><nav class="nav"><a href="index.html">Home</a><a href="discover.html">Discover</a><button class="button ghost small" data-logout>Sign in</button></nav></header>
 <main class="shell app-main room-layout"><section class="dashboard-head"><div><span class="eyebrow">Direct room connection</span><h1 id="room-title">Connecting...</h1><p id="connection-status">Requesting an authorized room ticket.</p></div><a class="button ghost small" href="index.html">Back home</a></section>
 <section class="chat-panel"><div id="message-list" class="message-list" aria-live="polite"><div class="empty">Loading encrypted room history...</div></div><form id="message-form" class="message-form"><label class="sr-only" for="message-input">Message</label><textarea id="message-input" rows="2" maxlength="2000" placeholder="Write a message..." disabled></textarea><button class="button primary" type="submit" disabled>Send</button></form></section></main>
 <script>
-const API_BASE = window.NETWORK_API_BASE || "../backend/api";
+const API_BASE = window.NETWORK_API_BASE || "/api";
 const roomId = new URLSearchParams(window.location.search).get("room");
 const statusText = document.querySelector("#connection-status");
 const roomTitle = document.querySelector("#room-title");
