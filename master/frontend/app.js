@@ -11,9 +11,7 @@ async function loadWebsiteTheme() {
   try {
     const data = await api("/auth/profile");
     applyWebsiteTheme(data.profile.website_theme);
-  } catch {
-    applyWebsiteTheme("paper");
-  }
+  } catch {}
 }
 
 async function api(path, options = {}) {

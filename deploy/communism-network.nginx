@@ -14,6 +14,11 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
+    location ~* \.html$ {
+        add_header Cache-Control "no-store, no-cache, must-revalidate, max-age=0" always;
+        try_files $uri =404;
+    }
+
     location /media/ {
         client_max_body_size 12m;
         proxy_pass http://127.0.0.1:5001;
@@ -61,6 +66,11 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto https;
+    }
+
+    location ~* \.html$ {
+        add_header Cache-Control "no-store, no-cache, must-revalidate, max-age=0" always;
+        try_files $uri =404;
     }
 
     location /media/ {
