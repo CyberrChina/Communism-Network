@@ -144,7 +144,11 @@ async function bindProfileForm() {
     previewPronouns.textContent = pronouns.value.split(",").map(value => value.trim()).filter(Boolean).join(" · ");
     previewAvatar.textContent = previewText.slice(0, 1).toUpperCase();
   };
-  [name, description, pronouns].forEach(field => field.addEventListener("input", updatePreview));
+  [name, description, pronouns].forEach(field => {
+    field.addEventListener("input", updatePreview);
+    field.addEventListener("change", updatePreview);
+  });
+  updatePreview();
   try {
     const data = await api("/auth/profile");
     name.value = data.profile.display_name || "";
