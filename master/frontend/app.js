@@ -133,11 +133,24 @@ async function bindProfileForm() {
   const name = form.elements.display_name;
   const description = form.elements.description;
   const pronouns = form.elements.pronouns;
+  const previewName = document.querySelector("[data-preview-name]");
+  const previewDescription = document.querySelector("[data-preview-description]");
+  const previewPronouns = document.querySelector("[data-preview-pronouns]");
+  const previewAvatar = document.querySelector("[data-preview-avatar]");
+  const updatePreview = () => {
+    const previewText = name.value.trim() || "Your name";
+    previewName.textContent = previewText;
+    previewDescription.textContent = description.value.trim() || "Your description will appear here.";
+    previewPronouns.textContent = pronouns.value.split(",").map(value => value.trim()).filter(Boolean).join(" · ");
+    previewAvatar.textContent = previewText.slice(0, 1).toUpperCase();
+  };
+  [name, description, pronouns].forEach(field => field.addEventListener("input", updatePreview));
   try {
     const data = await api("/auth/profile");
     name.value = data.profile.display_name || "";
     description.value = data.profile.description || "";
     pronouns.value = (data.profile.pronouns || []).join(", ");
+    updatePreview();
   } catch (error) {
     showError(form, error.message);
     return;

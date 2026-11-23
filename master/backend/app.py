@@ -626,6 +626,24 @@ def room_event(room_id: str):
     return jsonify({"ok": True})
 
 
+@app.post("/api/rooms/<room_id>/profiles/<int:user_id>")
+def room_profile(room_id: str, user_id: int):
+    if not require_room_server_auth():
+        return error("room server authentication failed", 401)
+    with rooms_lock:
+        if room_id not in rooms:
+            return error("room not found", 404)
+    try:
+        with db_connection() as connection, connection.cursor() as cursor:
+            cursor.execute("SELECT id, username, display_name, description, pronouns FROM users WHERE id = %s", (user_id,))
+            user = cursor.fetchone()
+    except pymysql.MySQLError:
+        return error("database unavailable")
+    if not user:
+        return error("profile not found", 404)
+    return jsonify({"ok": True, "profile": profile_from_row(user)})
+
+
 @app.get("/routing/rooms")
 def list_room_servers():
     with rooms_lock:
