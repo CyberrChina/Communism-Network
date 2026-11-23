@@ -1,6 +1,19 @@
 const API_BASE = window.NETWORK_API_BASE || "/api";
 let csrfToken = "";
 
+function applyWebsiteTheme(theme) {
+  document.documentElement.dataset.theme = ["paper", "midnight", "red"].includes(theme) ? theme : "paper";
+}
+
+async function loadWebsiteTheme() {
+  try {
+    const data = await api("/auth/profile");
+    applyWebsiteTheme(data.profile.website_theme);
+  } catch {
+    applyWebsiteTheme("paper");
+  }
+}
+
 async function api(path, options = {}) {
   const method = (options.method || "GET").toUpperCase();
   const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
@@ -133,16 +146,20 @@ async function bindProfileForm() {
   const name = form.elements.display_name;
   const description = form.elements.description;
   const pronouns = form.elements.pronouns;
+  const websiteTheme = form.elements.website_theme;
+  const profileTheme = form.elements.profile_theme;
   const previewName = document.querySelector("[data-preview-name]");
   const previewDescription = document.querySelector("[data-preview-description]");
   const previewPronouns = document.querySelector("[data-preview-pronouns]");
   const previewAvatar = document.querySelector("[data-preview-avatar]");
+  const previewCard = document.querySelector("[data-profile-preview-card]");
   const updatePreview = () => {
     const previewText = name.value.trim() || "Your name";
     previewName.textContent = previewText;
     previewDescription.textContent = description.value.trim() || "Your description will appear here.";
     previewPronouns.textContent = pronouns.value.split(",").map(value => value.trim()).filter(Boolean).join(" · ");
     previewAvatar.textContent = previewText.slice(0, 1).toUpperCase();
+    previewCard.dataset.theme = profileTheme.value;
   };
   [name, description, pronouns].forEach(field => {
     field.addEventListener("input", updatePreview);
@@ -154,6 +171,9 @@ async function bindProfileForm() {
     name.value = data.profile.display_name || "";
     description.value = data.profile.description || "";
     pronouns.value = (data.profile.pronouns || []).join(", ");
+    websiteTheme.value = data.profile.website_theme || "paper";
+    profileTheme.value = data.profile.profile_theme || "paper";
+    applyWebsiteTheme(websiteTheme.value);
     updatePreview();
   } catch (error) {
     showError(form, error.message);
@@ -166,7 +186,8 @@ async function bindProfileForm() {
     button.disabled = true;
     try {
       const values = pronouns.value.split(",").map(value => value.trim()).filter(Boolean);
-      await api("/auth/profile", { method: "PUT", body: JSON.stringify({ display_name: name.value, description: description.value, pronouns: values }) });
+      await api("/auth/profile", { method: "PUT", body: JSON.stringify({ display_name: name.value, description: description.value, pronouns: values, website_theme: websiteTheme.value, profile_theme: profileTheme.value }) });
+      applyWebsiteTheme(websiteTheme.value);
       showToast("Profile saved.");
     } catch (error) {
       showError(form, error.message);
@@ -187,5 +208,6 @@ function showToast(message) {
 bindAuthForm();
 bindAuthAction();
 bindProfileForm();
+loadWebsiteTheme();
 loadJoinedRooms();
 loadDiscoverRooms();

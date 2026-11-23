@@ -70,6 +70,7 @@ async function showProfile(userId, fallbackName) {
     profilePronouns.textContent = (profile.pronouns || []).join(" · ");
     profileDescription.textContent = profile.description || "No description yet.";
     profileAvatar.textContent = (profile.display_name || profile.username || "?").slice(0, 1).toUpperCase();
+    profileCard.dataset.theme = profile.profile_theme || "paper";
   } catch (error) {
     profileUsername.textContent = error.message;
   }
