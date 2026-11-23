@@ -152,11 +152,12 @@ h2 { font-size: 32px; letter-spacing: -.05em; margin: 0; }
 .message-meta strong { font-size: 13px; }
 .message-meta time { color: var(--muted); font-size: 11px; }
 .message-form { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; gap: 10px; align-items: center; padding: 14px; border-top: 1px solid var(--line); background: var(--white); }
-.message-form textarea { width: 100%; resize: vertical; min-height: 48px; max-height: 150px; border: 1px solid #d8cec8; border-radius: 6px; padding: 12px; color: var(--ink); background: var(--white); }
+.message-form textarea { width: 100%; resize: none; min-height: 48px; max-height: 150px; border: 1px solid #d8cec8; border-radius: 6px; padding: 12px; color: var(--ink); background: var(--white); }
 .message-form textarea:focus { outline: 2px solid rgba(217,47,53,.22); border-color: var(--red); }
 .message-form > .media-button, .message-form > .sound-button, .message-form > .button { height: 48px; }
 .message-form > .button { width: 84px; min-width: 84px; padding: 0 10px; }
 .media-button { display: inline-flex; align-items: center; justify-content: center; width: 48px; min-width: 48px; padding: 0; border: 1px solid #d8cec8; border-radius: 6px; color: var(--red); background: var(--white); font-size: 26px; font-weight: 500; line-height: 1; cursor: pointer; }
+.media-button > span:first-child { display: block; width: 1em; height: 1em; line-height: 1em; text-align: center; }
 .media-button:hover { border-color: var(--red); background: #fff5f3; }
 .sound-button { width: 84px; min-width: 84px; border: 1px solid #d8cec8; border-radius: 6px; padding: 0 10px; color: var(--muted); background: var(--white); font-size: 12px; font-weight: 800; cursor: pointer; }
 .sound-button:hover { border-color: var(--red); color: var(--red); }
