@@ -101,6 +101,9 @@ h2 { font-size: 32px; letter-spacing: -.05em; margin: 0; }
 .room-layout { padding-top: 18px; }
 .room-page .room-layout { width: 100%; max-width: none; min-height: calc(100vh - 82px); padding: 18px 24px 24px; display: flex; flex-direction: column; }
 .room-page .room-layout .dashboard-head { flex: 0 0 auto; }
+.room-page .dashboard-head { margin-bottom: 12px; align-items: center; }
+.room-page .dashboard-head h1 { margin: 8px 0 6px; font-size: clamp(36px, 5vw, 58px); }
+.room-page .dashboard-head p { margin: 0; }
 .room-page .chat-panel { flex: 1; min-height: 0; }
 .chat-panel { background: var(--white); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
 .chat-workspace { display: grid; grid-template-columns: 220px minmax(0, 1fr); height: calc(100vh - 205px); min-height: 520px; }
@@ -166,7 +169,7 @@ h2 { font-size: 32px; letter-spacing: -.05em; margin: 0; }
   .hero-art { min-height: 240px; }
   .grid { grid-template-columns: 1fr; }
   .dashboard-head, .section-heading { align-items: start; flex-direction: column; }
-  .chat-workspace { grid-template-columns: 1fr; }
+  .chat-workspace { grid-template-columns: 1fr; height: auto; }
   .channel-sidebar { border-right: 0; border-bottom: 1px solid var(--line); padding: 12px; }
   .channel-tabs { display: flex; overflow-x: auto; }
   .channel-tab { width: auto; min-width: max-content; }

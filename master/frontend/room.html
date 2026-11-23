@@ -89,6 +89,15 @@ async function api(path, options = {}) {
   return data;
 }
 
+async function loadRoomTheme() {
+  try {
+    const data = await api("/auth/profile");
+    const theme = ["paper", "midnight", "red"].includes(data.profile.website_theme) ? data.profile.website_theme : "paper";
+    document.documentElement.dataset.theme = theme;
+    localStorage.setItem("cn-website-theme", theme);
+  } catch {}
+}
+
 function setStatus(message, error = false) {
   statusText.textContent = message;
   statusText.dataset.error = error ? "true" : "false";
@@ -530,6 +539,7 @@ window.addEventListener("pageshow", () => {
 
 
 (async () => {
+  loadRoomTheme();
   if (!roomId) { setStatus("No room was selected.", true); return; }
   try {
     const connection = await api(`/rooms/${encodeURIComponent(roomId)}/connection`);
