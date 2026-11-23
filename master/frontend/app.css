@@ -80,12 +80,12 @@ h2 { font-size: 32px; letter-spacing: -.05em; margin: 0; }
 .profile-preview-card[data-theme="red"] { color: #fffaf8; border-color: #8f2028; background: #a51f2a; }
 .profile-preview-card[data-theme="midnight"] .preview-pronouns, .profile-preview-card[data-theme="midnight"] .preview-description { color: #c9bec0; }
 .profile-preview-card[data-theme="red"] .preview-pronouns, .profile-preview-card[data-theme="red"] .preview-description { color: #ffe1dc; }
-.profile-popover { position: fixed; z-index: 10; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(390px, calc(100% - 32px)); min-height: 280px; padding: 76px 24px 24px; overflow: hidden; border: 1px solid #d8cec8; border-radius: 10px; background: var(--white); box-shadow: 0 24px 70px rgba(44,25,18,.22); }
+.profile-popover { position: fixed; z-index: 10; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(390px, calc(100% - 32px)); min-height: 280px; padding: 24px; overflow: hidden; border: 1px solid #d8cec8; border-radius: 10px; background: var(--white); box-shadow: 0 24px 70px rgba(44,25,18,.22); }
 .profile-popover[data-theme="midnight"] { color: #f4eee9; border-color: #4d4850; background: #242226; }
 .profile-popover[data-theme="red"] { color: #fffaf8; border-color: #8f2028; background: #a51f2a; }
 .profile-popover[data-theme="midnight"]:before { background: #302d34; border-color: #4d4850; }
 .profile-popover[data-theme="red"]:before { background: #851923; border-color: #b83d45; }
-.profile-popover:before { content: ""; position: absolute; inset: 0 0 auto; height: 78px; background: #ebe4de; border-bottom: 1px solid var(--line); }
+.profile-popover:before { display: none; }
 .profile-close { position: absolute; top: 8px; right: 10px; border: 0; color: var(--muted); background: transparent; font-size: 24px; line-height: 1; }
 .profile-popover-avatar, .preview-avatar { display: grid; place-items: center; width: 58px; height: 58px; margin-bottom: 12px; border: 5px solid var(--white); border-radius: 50%; color: white; background: var(--red); font-size: 20px; font-weight: 900; }
 .profile-popover strong, .preview-name { display: block; font-size: 21px; }
