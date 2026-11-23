@@ -200,6 +200,12 @@ def init_db() -> None:
                 ciphertext BLOB NOT NULL,
                 sent_at TEXT NOT NULL,
                 protocol_version TEXT NOT NULL,
+                reply_to TEXT,
+                edited_at TEXT,
+                deleted_at TEXT,
+                pinned_at TEXT,
+                pinned_by INTEGER,
+                reactions_json TEXT NOT NULL DEFAULT '{}',
                 UNIQUE(sender_id, client_message_id)
             );
             CREATE TABLE IF NOT EXISTS media (
@@ -231,6 +237,16 @@ def init_db() -> None:
             connection.execute("ALTER TABLE messages ADD COLUMN media_mime TEXT")
         if "media_size" not in columns:
             connection.execute("ALTER TABLE messages ADD COLUMN media_size INTEGER")
+        for column, definition in {
+            "reply_to": "TEXT",
+            "edited_at": "TEXT",
+            "deleted_at": "TEXT",
+            "pinned_at": "TEXT",
+            "pinned_by": "INTEGER",
+            "reactions_json": "TEXT NOT NULL DEFAULT '{}'",
+        }.items():
+            if column not in columns:
+                connection.execute(f"ALTER TABLE messages ADD COLUMN {column} {definition}")
     MEDIA_DIRECTORY.mkdir(parents=True, exist_ok=True)
 
 
@@ -304,10 +320,17 @@ def channel_exists(channel_id: str) -> bool:
 
 
 def message_from_row(row: sqlite3.Row) -> dict[str, object]:
+    if row["deleted_at"]:
+        body = "[message deleted]"
+    else:
+        try:
+            body = cipher.decrypt(bytes(row["ciphertext"])).decode("utf-8")
+        except (InvalidToken, UnicodeDecodeError):
+            body = "[message unavailable]"
     try:
-        body = cipher.decrypt(bytes(row["ciphertext"])).decode("utf-8")
-    except (InvalidToken, UnicodeDecodeError):
-        body = "[message unavailable]"
+        reactions = json.loads(row["reactions_json"] or "{}")
+    except (TypeError, json.JSONDecodeError):
+        reactions = {}
     return {
         "message_id": row["message_id"],
         "room_id": row["room_id"],
@@ -318,6 +341,11 @@ def message_from_row(row: sqlite3.Row) -> dict[str, object]:
         "message_type": row["message_type"],
         "sent_at": row["sent_at"],
         "protocol_version": row["protocol_version"],
+        "reply_to": row["reply_to"],
+        "edited_at": row["edited_at"],
+        "deleted": bool(row["deleted_at"]),
+        "pinned": bool(row["pinned_at"]),
+        "reactions": reactions if isinstance(reactions, dict) else {},
     }
 
 
@@ -339,7 +367,7 @@ def history(channel_id: str = "general") -> list[dict[str, object]]:
     return [media_message_from_row(row) if row["message_type"] == "image" else message_from_row(row) for row in reversed(rows)]
 
 
-def persist_message(user_id: int, username: str, client_message_id: str, body: str, channel_id: str = "general") -> tuple[dict[str, object], bool]:
+def persist_message(user_id: int, username: str, client_message_id: str, body: str, channel_id: str = "general", reply_to: str | None = None) -> tuple[dict[str, object], bool]:
     message_id = uuid.uuid4().hex
     sent_at = utc_now()
     encrypted = cipher.encrypt(body.encode("utf-8"))
@@ -348,9 +376,9 @@ def persist_message(user_id: int, username: str, client_message_id: str, body: s
             connection.execute(
                 """INSERT INTO messages
                    (message_id, room_id, sender_id, sender_name, client_message_id,
-                    channel_id, message_type, ciphertext, sent_at, protocol_version)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (message_id, ROOM_ID, user_id, username, client_message_id, channel_id, "text", encrypted, sent_at, PROTOCOL_VERSION),
+                   channel_id, message_type, ciphertext, sent_at, protocol_version, reply_to)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (message_id, ROOM_ID, user_id, username, client_message_id, channel_id, "text", encrypted, sent_at, PROTOCOL_VERSION, reply_to),
             )
             row = connection.execute("SELECT * FROM messages WHERE message_id = ?", (message_id,)).fetchone()
             return message_from_row(row), True
@@ -360,6 +388,57 @@ def persist_message(user_id: int, username: str, client_message_id: str, body: s
                 (user_id, client_message_id),
             ).fetchone()
             return message_from_row(row), False
+
+
+def find_message(message_id: str, channel_id: str) -> sqlite3.Row | None:
+    with db_connection() as connection:
+        return connection.execute(
+            "SELECT * FROM messages WHERE message_id = ? AND room_id = ? AND channel_id = ?",
+            (message_id, ROOM_ID, channel_id),
+        ).fetchone()
+
+
+def update_message_event(message_id: str, channel_id: str, user_id: int, body: str) -> dict[str, object] | None:
+    with db_connection() as connection:
+        row = connection.execute("SELECT * FROM messages WHERE message_id = ? AND room_id = ? AND channel_id = ?", (message_id, ROOM_ID, channel_id)).fetchone()
+        if row is None or int(row["sender_id"]) != user_id or row["deleted_at"]:
+            return None
+        edited_at = utc_now()
+        connection.execute("UPDATE messages SET ciphertext = ?, edited_at = ? WHERE message_id = ?", (cipher.encrypt(body.encode("utf-8")), edited_at, message_id))
+        row = connection.execute("SELECT * FROM messages WHERE message_id = ?", (message_id,)).fetchone()
+        return message_from_row(row)
+
+
+def mutate_message(message_id: str, channel_id: str, user_id: int, action: str, emoji: str = "") -> dict[str, object] | None:
+    with db_connection() as connection:
+        row = connection.execute("SELECT * FROM messages WHERE message_id = ? AND room_id = ? AND channel_id = ?", (message_id, ROOM_ID, channel_id)).fetchone()
+        if row is None:
+            return None
+        if action in {"delete", "pin"} and int(row["sender_id"]) != user_id:
+            return None
+        if action == "delete":
+            connection.execute("UPDATE messages SET deleted_at = ? WHERE message_id = ?", (utc_now(), message_id))
+        elif action == "pin":
+            connection.execute("UPDATE messages SET pinned_at = ?, pinned_by = ? WHERE message_id = ?", (utc_now(), user_id, message_id))
+        elif action == "react":
+            try:
+                reactions = json.loads(row["reactions_json"] or "{}")
+            except (TypeError, json.JSONDecodeError):
+                reactions = {}
+            users = set(reactions.get(emoji, [])) if isinstance(reactions, dict) else set()
+            if user_id in users:
+                users.remove(user_id)
+            else:
+                users.add(user_id)
+            if users:
+                reactions[emoji] = sorted(users)
+            else:
+                reactions.pop(emoji, None)
+            connection.execute("UPDATE messages SET reactions_json = ? WHERE message_id = ?", (json.dumps(reactions, separators=(",", ":")), message_id))
+        else:
+            return None
+        updated = connection.execute("SELECT * FROM messages WHERE message_id = ?", (message_id,)).fetchone()
+        return message_from_row(updated)
 
 
 def auth_from_request() -> dict[str, object] | None:
@@ -525,6 +604,39 @@ def handle_message(ws: object, client: dict[str, object], event: dict[str, objec
             if other_client.get("peer_id") == target_peer_id:
                 return send_json(other_ws, {"type": "voice_signal", "from_peer_id": peer_id, "signal": signal})
         return send_json(ws, {"type": "error", "code": "voice_peer_not_found", "message": "voice peer not found"})
+    channel_id = str(client.get("channel_id") or "general")
+    if event.get("type") in {"typing", "read_receipt"}:
+        payload = {"type": event["type"], "channel_id": channel_id, "user_id": client["user_id"], "username": client["username"]}
+        if event["type"] == "typing":
+            payload["typing"] = bool(event.get("typing"))
+        else:
+            message_id = event.get("message_id")
+            if not isinstance(message_id, str) or len(message_id) > 128:
+                return send_json(ws, {"type": "error", "code": "invalid_read_receipt", "message": "invalid message id"})
+            payload["message_id"] = message_id
+        broadcast(payload, channel_id)
+        return True
+    if event.get("type") in {"edit_message", "delete_message", "pin_message", "react_message"}:
+        message_id = event.get("message_id")
+        if not isinstance(message_id, str) or not 1 <= len(message_id) <= 128:
+            return send_json(ws, {"type": "error", "code": "invalid_message_id", "message": "invalid message id"})
+        action = {"edit_message": "edit", "delete_message": "delete", "pin_message": "pin", "react_message": "react"}[event["type"]]
+        if action == "edit":
+            body = event.get("body")
+            if not isinstance(body, str) or not body.strip() or len(body) > MAX_MESSAGE_LENGTH:
+                return send_json(ws, {"type": "error", "code": "invalid_message", "message": "message must be 1-2000 characters"})
+            updated = update_message_event(message_id, channel_id, int(client["user_id"]), body.strip())
+        elif action == "react":
+            emoji = event.get("emoji")
+            if not isinstance(emoji, str) or not 1 <= len(emoji) <= 16:
+                return send_json(ws, {"type": "error", "code": "invalid_reaction", "message": "invalid reaction"})
+            updated = mutate_message(message_id, channel_id, int(client["user_id"]), action, emoji)
+        else:
+            updated = mutate_message(message_id, channel_id, int(client["user_id"]), action)
+        if updated is None:
+            return send_json(ws, {"type": "error", "code": "message_action_denied", "message": "message action is not allowed"})
+        broadcast({"type": "message_updated", "message": updated}, channel_id)
+        return True
     if event.get("type") == "switch_channel":
         channel_id = str(event.get("channel_id") or "").strip().lower()
         if not channel_exists(channel_id):
@@ -537,13 +649,15 @@ def handle_message(ws: object, client: dict[str, object], event: dict[str, objec
         return send_json(ws, {"type": "error", "code": "unsupported_event", "message": "unsupported event"})
     if event.get("room_id", ROOM_ID) != ROOM_ID:
         return send_json(ws, {"type": "error", "code": "wrong_room", "message": "wrong room"})
-    channel_id = str(client.get("channel_id") or "general")
     if CHANNEL_MAP.get(channel_id, {}).get("type") != "text":
         return send_json(ws, {"type": "error", "code": "not_text_channel", "message": "messaging is only available in text channels"})
     if not channel_messaging_enabled(channel_id):
         return send_json(ws, {"type": "error", "code": "messaging_disabled", "message": "messaging is disabled for this channel"})
     body = event.get("body")
     client_message_id = event.get("client_message_id")
+    reply_to = event.get("reply_to")
+    if reply_to is not None and (not isinstance(reply_to, str) or find_message(reply_to, channel_id) is None):
+        return send_json(ws, {"type": "error", "code": "invalid_reply", "message": "the replied message was not found"})
     if not isinstance(body, str) or not body.strip() or len(body) > MAX_MESSAGE_LENGTH:
         return send_json(ws, {"type": "error", "code": "invalid_message", "message": "message must be 1-2000 characters"})
     if not isinstance(client_message_id, str) or not 1 <= len(client_message_id) <= 128:
@@ -555,7 +669,7 @@ def handle_message(ws: object, client: dict[str, object], event: dict[str, objec
     if len(recent) >= RATE_LIMIT_COUNT:
         return send_json(ws, {"type": "error", "code": "rate_limited", "message": "too many messages"})
     recent.append(now)
-    message, created = persist_message(int(client["user_id"]), str(client["username"]), client_message_id, body.strip(), channel_id)
+    message, created = persist_message(int(client["user_id"]), str(client["username"]), client_message_id, body.strip(), channel_id, reply_to)
     if not send_json(ws, {"type": "message_ack", "client_message_id": client_message_id, "created": created, "message": message}):
         return False
     if created:

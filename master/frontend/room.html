@@ -1,8 +1,8 @@
 <!doctype html>
-<html lang="en"><head><script>try{document.documentElement.dataset.theme=localStorage.getItem("cn-website-theme")||"paper"}catch(e){}</script><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Room | Communism Network</title><link rel="stylesheet" href="app.css?v=20261123-composer-compact"></head>
+<html lang="en"><head><script>try{document.documentElement.dataset.theme=localStorage.getItem("cn-website-theme")||"paper"}catch(e){}</script><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Room | Communism Network</title><link rel="stylesheet" href="app.css?v=20261123-phase1-actions"></head>
 <body class="room-page"><header class="shell topbar"><a class="brand" href="home.html"><span class="brand-mark">✦</span> Communism Network</a><nav class="nav"><a href="home.html">Home</a><a href="discover.html">Discover</a><a href="profile.html" class="button ghost small profile-link">Settings</a><button class="button ghost small" data-logout>Sign in</button></nav></header>
 <main class="shell app-main room-layout"><section class="dashboard-head"><div><span class="eyebrow">Direct room connection</span><h1 id="room-title">Connecting...</h1><p id="connection-status">Requesting an authorized room ticket.</p></div><a class="button ghost small" href="home.html">Back home</a></section>
-<section class="chat-panel"><div class="chat-workspace"><aside class="channel-sidebar"><div class="channel-heading"><span>Channels</span><span class="channel-count" id="channel-count">0</span></div><nav id="channel-tabs" class="channel-tabs" aria-label="Room channels"></nav><select id="channel-select" class="sr-only" disabled aria-hidden="true"></select></aside><div class="chat-column"><section id="voice-panel" class="voice-panel" hidden><div class="voice-panel-head"><div><span class="voice-kicker">Voice channel</span><h2 id="voice-channel-name">Lounge</h2><p id="voice-status">Join to start talking.</p></div><button id="voice-toggle" class="voice-button" type="button">Join voice</button></div><div id="voice-members" class="voice-members" aria-live="polite"></div></section><div id="message-list" class="message-list" aria-live="polite"><div class="empty">Loading encrypted room history...</div></div><form id="message-form" class="message-form"><label id="image-picker-label" class="media-button" hidden title="Attach an image"><span aria-hidden="true">+</span><span class="sr-only">Attach image</span><input id="image-picker" type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden></label><label class="sr-only" for="message-input">Message</label><textarea id="message-input" rows="2" maxlength="2000" placeholder="Write a message..." disabled></textarea><button id="sound-toggle" class="sound-button" type="button" title="Toggle notification sounds">Sound on</button><button class="button primary" type="submit" disabled>Send</button></form></div></div></section></main><section id="profile-card" class="profile-popover" hidden role="dialog" aria-label="User profile"><button id="profile-close" class="profile-close" type="button" aria-label="Close profile">×</button><div class="profile-popover-avatar" id="profile-avatar"></div><strong id="profile-display-name"></strong><span id="profile-username"></span><span id="profile-pronouns"></span><p id="profile-description"></p></section>
+<section class="chat-panel"><div class="chat-workspace"><aside class="channel-sidebar"><div class="channel-heading"><span>Channels</span><span class="channel-count" id="channel-count">0</span></div><nav id="channel-tabs" class="channel-tabs" aria-label="Room channels"></nav><select id="channel-select" class="sr-only" disabled aria-hidden="true"></select></aside><div class="chat-column"><section id="voice-panel" class="voice-panel" hidden><div class="voice-panel-head"><div><span class="voice-kicker">Voice channel</span><h2 id="voice-channel-name">Lounge</h2><p id="voice-status">Join to start talking.</p></div><button id="voice-toggle" class="voice-button" type="button">Join voice</button></div><div id="voice-members" class="voice-members" aria-live="polite"></div></section><div id="message-list" class="message-list" aria-live="polite"><div class="empty">Loading encrypted room history...</div></div><div id="typing-indicator" class="typing-indicator" aria-live="polite" hidden></div><div id="replying-to" class="replying-to" hidden></div><form id="message-form" class="message-form"><label id="image-picker-label" class="media-button" hidden title="Attach an image"><span aria-hidden="true">+</span><span class="sr-only">Attach image</span><input id="image-picker" type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden></label><label class="sr-only" for="message-input">Message</label><textarea id="message-input" rows="2" maxlength="2000" placeholder="Write a message..." disabled></textarea><button id="sound-toggle" class="sound-button" type="button" title="Toggle notification sounds">Sound on</button><button class="button primary" type="submit" disabled>Send</button></form></div></div></section></main><section id="profile-card" class="profile-popover" hidden role="dialog" aria-label="User profile"><button id="profile-close" class="profile-close" type="button" aria-label="Close profile">×</button><div class="profile-popover-avatar" id="profile-avatar"></div><strong id="profile-display-name"></strong><span id="profile-username"></span><span id="profile-pronouns"></span><p id="profile-description"></p></section>
 <script>
 const API_BASE = window.NETWORK_API_BASE || "/api";
 const roomId = new URLSearchParams(window.location.search).get("room");
@@ -23,6 +23,8 @@ const voicePanel = document.querySelector("#voice-panel");
 const voiceMembers = document.querySelector("#voice-members");
 const voiceChannelName = document.querySelector("#voice-channel-name");
 const voiceStatus = document.querySelector("#voice-status");
+const typingIndicator = document.querySelector("#typing-indicator");
+const replyingTo = document.querySelector("#replying-to");
 const profileCard = document.querySelector("#profile-card");
 const profileAvatar = document.querySelector("#profile-avatar");
 const profileDisplayName = document.querySelector("#profile-display-name");
@@ -46,6 +48,8 @@ let peerId = crypto.randomUUID();
 let localStream;
 let reconnectTimer;
 let reconnectAttempts = 0;
+let replyTarget = null;
+let typingTimer;
 let pageVisible = !document.hidden;
 const peerConnections = new Map();
 const voiceMemberMap = new Map();
@@ -294,6 +298,7 @@ function renderMessage(message) {
   if (empty) empty.remove();
   const item = document.createElement("article");
   item.className = "message-item";
+  item.dataset.messageId = message.message_id;
   const timestamp = new Date(message.sent_at).toLocaleString([], { dateStyle: "short", timeStyle: "short" });
   const meta = document.createElement("div");
   meta.className = "message-meta";
@@ -303,9 +308,15 @@ function renderMessage(message) {
   sender.textContent = message.sender_name;
   sender.addEventListener("click", () => showProfile(message.sender_id, message.sender_name));
   const time = document.createElement("time");
-  time.textContent = timestamp;
+  time.textContent = `${timestamp}${message.edited_at ? " (edited)" : ""}`;
   meta.append(sender, time);
   item.append(meta);
+  if (message.reply_to) {
+    const reply = document.createElement("div");
+    reply.className = "message-reply";
+    reply.textContent = `Replying to ${message.reply_to.slice(0, 8)}`;
+    item.append(reply);
+  }
   if (message.message_type === "image") {
     const image = document.createElement("img");
     image.className = "message-image";
@@ -321,8 +332,61 @@ function renderMessage(message) {
     body.textContent = message.body;
     item.append(body);
   }
+  if (message.pinned) {
+    const pin = document.createElement("span");
+    pin.className = "message-pin";
+    pin.textContent = "Pinned";
+    item.append(pin);
+  }
+  const reactions = document.createElement("div");
+  reactions.className = "message-reactions";
+  for (const [emoji, users] of Object.entries(message.reactions || {})) {
+    const reaction = document.createElement("button");
+    reaction.type = "button";
+    reaction.className = "reaction-button";
+    reaction.textContent = `${emoji} ${users.length}`;
+    reaction.addEventListener("click", () => sendEvent({ type: "react_message", message_id: message.message_id, emoji }));
+    reactions.append(reaction);
+  }
+  const actions = document.createElement("div");
+  actions.className = "message-actions";
+  [["Reply", () => beginReply(message)], ["React", () => sendEvent({ type: "react_message", message_id: message.message_id, emoji: "👍" })], ["Pin", () => sendEvent({ type: "pin_message", message_id: message.message_id })]].forEach(([label, handler]) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = label;
+    button.addEventListener("click", handler);
+    actions.append(button);
+  });
+  if (message.sender_id === currentUserId && !message.deleted) {
+    const edit = document.createElement("button");
+    edit.type = "button";
+    edit.textContent = "Edit";
+    edit.addEventListener("click", () => editMessage(message));
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.textContent = "Delete";
+    remove.addEventListener("click", () => sendEvent({ type: "delete_message", message_id: message.message_id }));
+    actions.append(edit, remove);
+  }
+  item.append(reactions, actions);
   messageList.appendChild(item);
   messageList.scrollTop = messageList.scrollHeight;
+}
+
+function sendEvent(event) {
+  if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(event));
+}
+
+function beginReply(message) {
+  replyTarget = message.message_id;
+  replyingTo.hidden = false;
+  replyingTo.textContent = `Replying to ${message.sender_name}: ${(message.body || "").slice(0, 100)}`;
+  input.focus();
+}
+
+function editMessage(message) {
+  const body = window.prompt("Edit message", message.body || "");
+  if (body && body.trim() && body.trim() !== message.body) sendEvent({ type: "edit_message", message_id: message.message_id, body: body.trim() });
 }
 
 function openSocket(connection) {
@@ -353,9 +417,27 @@ function openSocket(connection) {
       if (payload.message.channel_id === currentChannel) {
         renderMessage(payload.message);
         playNotification();
+        sendEvent({ type: "read_receipt", message_id: payload.message.message_id });
       } else {
         unreadCounts.set(payload.message.channel_id, Math.min(10, (unreadCounts.get(payload.message.channel_id) || 0) + 1));
         updateUnreadBadge(payload.message.channel_id);
+      }
+    } else if (payload.type === "message_updated") {
+      const message = payload.message;
+      if (message?.channel_id === currentChannel) {
+        messageList.querySelector(`[data-message-id="${CSS.escape(message.message_id)}"]`)?.remove();
+        rendered.delete(message.message_id);
+        renderMessage(message);
+      }
+    } else if (payload.type === "typing") {
+      if (payload.channel_id === currentChannel && payload.user_id !== currentUserId) {
+        typingIndicator.hidden = !payload.typing;
+        typingIndicator.textContent = payload.typing ? `${payload.username} is typing...` : "";
+      }
+    } else if (payload.type === "read_receipt") {
+      if (payload.channel_id === currentChannel && payload.user_id !== currentUserId) {
+        const message = messageList.querySelector(`[data-message-id="${CSS.escape(payload.message_id)}"]`);
+        if (message) message.dataset.read = "true";
       }
     } else if (payload.type === "channel_changed") {
       if (voiceChannel) leaveVoice();
@@ -501,8 +583,16 @@ form.addEventListener("submit", (event) => {
   const body = input.value.trim();
   if (!body || !socket || socket.readyState !== WebSocket.OPEN) return;
   const clientMessageId = crypto.randomUUID();
-  socket.send(JSON.stringify({ type: "send_message", room_id: roomId, client_message_id: clientMessageId, body }));
+  sendEvent({ type: "send_message", room_id: roomId, client_message_id: clientMessageId, body, reply_to: replyTarget });
   input.value = "";
+  replyTarget = null;
+  replyingTo.hidden = true;
+});
+
+input.addEventListener("input", () => {
+  sendEvent({ type: "typing", typing: input.value.length > 0 });
+  window.clearTimeout(typingTimer);
+  typingTimer = window.setTimeout(() => sendEvent({ type: "typing", typing: false }), 1200);
 });
 
 channelSelect.addEventListener("change", () => {
