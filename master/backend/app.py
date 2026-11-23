@@ -39,6 +39,7 @@ ROOM_TICKET_MAX_AGE = int(os.environ.get("CHAT_ROOM_TICKET_MAX_AGE", "120"))
 ticket_serializer = URLSafeTimedSerializer(ROOM_TICKET_SECRET, salt="communism-network-room-ticket-v1")
 password_hasher = PasswordHasher()
 USERNAME_RE = re.compile(r"^[A-Za-z0-9_]{3,32}$")
+THEMES = {"paper", "midnight", "red"}
 
 
 def utc_now() -> str:
@@ -131,6 +132,8 @@ def clean_registration_payload(payload: dict[str, Any]):
 def clean_profile_payload(payload: dict[str, Any]):
     display_name = str(payload.get("display_name") or "").strip()
     description = str(payload.get("description") or "").strip()
+    website_theme = str(payload.get("website_theme") or "paper").strip().lower()
+    profile_theme = str(payload.get("profile_theme") or "paper").strip().lower()
     pronouns = payload.get("pronouns", [])
     if not isinstance(pronouns, list):
         return None, "pronouns must be a list"
@@ -144,7 +147,9 @@ def clean_profile_payload(payload: dict[str, Any]):
         return None, "name must be 20 characters or fewer"
     if len(description) > 200:
         return None, "description must be 200 characters or fewer"
-    return {"display_name": display_name, "description": description, "pronouns": cleaned_pronouns}, None
+    if website_theme not in THEMES or profile_theme not in THEMES:
+        return None, "invalid theme"
+    return {"display_name": display_name, "description": description, "pronouns": cleaned_pronouns, "website_theme": website_theme, "profile_theme": profile_theme}, None
 
 
 def profile_from_row(user: dict[str, Any]) -> dict[str, Any]:
@@ -160,6 +165,8 @@ def profile_from_row(user: dict[str, Any]) -> dict[str, Any]:
         "display_name": user.get("display_name") or "",
         "description": user.get("description") or "",
         "pronouns": [str(value) for value in pronouns],
+        "website_theme": user.get("website_theme") or "paper",
+        "profile_theme": user.get("profile_theme") or "paper",
     }
 
 
@@ -305,7 +312,7 @@ def register():
         return error(message, 400)
     try:
         with db_connection() as connection, connection.cursor() as cursor:
-            cursor.execute("INSERT INTO users (username, password_hash, display_name, description, pronouns) VALUES (%s, %s, %s, %s, %s)", (clean["username"], password_hasher.hash(clean["password"]), "", "", "[]"))
+            cursor.execute("INSERT INTO users (username, password_hash, display_name, description, pronouns, website_theme, profile_theme) VALUES (%s, %s, %s, %s, %s, %s, %s)", (clean["username"], password_hasher.hash(clean["password"]), "", "", "[]", "paper", "paper"))
             user_id = cursor.lastrowid
     except pymysql.err.IntegrityError as exc:
         if exc.args and exc.args[0] == 1062:
@@ -368,7 +375,7 @@ def me():
 def profile():
     try:
         with db_connection() as connection, connection.cursor() as cursor:
-            cursor.execute("SELECT id, username, display_name, description, pronouns FROM users WHERE id = %s", (current_user_id(),))
+            cursor.execute("SELECT id, username, display_name, description, pronouns, website_theme, profile_theme FROM users WHERE id = %s", (current_user_id(),))
             user = cursor.fetchone()
     except pymysql.MySQLError:
         return error("database unavailable")
@@ -389,10 +396,10 @@ def update_profile():
     try:
         with db_connection() as connection, connection.cursor() as cursor:
             cursor.execute(
-                "UPDATE users SET display_name = %s, description = %s, pronouns = %s WHERE id = %s",
-                (clean["display_name"], clean["description"], json.dumps(clean["pronouns"]), current_user_id()),
+                "UPDATE users SET display_name = %s, description = %s, pronouns = %s, website_theme = %s, profile_theme = %s WHERE id = %s",
+                (clean["display_name"], clean["description"], json.dumps(clean["pronouns"], ensure_ascii=False, separators=(",", ":")), clean["website_theme"], clean["profile_theme"], current_user_id()),
             )
-            cursor.execute("SELECT id, username, display_name, description, pronouns FROM users WHERE id = %s", (current_user_id(),))
+            cursor.execute("SELECT id, username, display_name, description, pronouns, website_theme, profile_theme FROM users WHERE id = %s", (current_user_id(),))
             user = cursor.fetchone()
     except pymysql.MySQLError:
         return error("database unavailable")
@@ -635,7 +642,7 @@ def room_profile(room_id: str, user_id: int):
             return error("room not found", 404)
     try:
         with db_connection() as connection, connection.cursor() as cursor:
-            cursor.execute("SELECT id, username, display_name, description, pronouns FROM users WHERE id = %s", (user_id,))
+            cursor.execute("SELECT id, username, display_name, description, pronouns, website_theme, profile_theme FROM users WHERE id = %s", (user_id,))
             user = cursor.fetchone()
     except pymysql.MySQLError:
         return error("database unavailable")
