@@ -42,6 +42,7 @@ MEDIA_DIRECTORY = Path(os.environ.get("ROOM_MEDIA_DIRECTORY", str(DATABASE_PATH.
 MEDIA_CLEANUP_INTERVAL = int(os.environ.get("ROOM_MEDIA_CLEANUP_INTERVAL", "3600"))
 RATE_LIMIT_COUNT = int(os.environ.get("ROOM_MESSAGE_RATE_COUNT", "10"))
 RATE_LIMIT_WINDOW = float(os.environ.get("ROOM_MESSAGE_RATE_WINDOW", "10"))
+SLOW_MODE_SECONDS = max(0, int(os.environ.get("ROOM_SLOW_MODE_SECONDS", "0")))
 ROOM_ID = os.environ.get("ROOM_ID", "").strip() or hashlib.sha256(f"{ROOM_NAME}\0{SERVER_ADDRESS}".encode()).hexdigest()[:16]
 
 message_key = os.environ.get("ROOM_MESSAGE_KEY", "")
@@ -66,6 +67,10 @@ def load_settings() -> dict[str, object]:
 
 
 ROOM_SETTINGS = load_settings()
+try:
+    SLOW_MODE_SECONDS = max(0, int(os.environ.get("ROOM_SLOW_MODE_SECONDS", str(ROOM_SETTINGS.get("slow_mode_seconds", SLOW_MODE_SECONDS)))))
+except (TypeError, ValueError):
+    SLOW_MODE_SECONDS = 0
 _env_images_enabled = os.environ.get("ROOM_IMAGES_ENABLED")
 IMAGES_ENABLED = bool(ROOM_SETTINGS.get("images_enabled", _env_images_enabled != "0" if _env_images_enabled is not None else True))
 MAX_IMAGE_BYTES = int(os.environ.get("ROOM_MAX_IMAGE_BYTES", str(ROOM_SETTINGS.get("image_upload_max_bytes", MAX_IMAGE_BYTES))))
@@ -668,7 +673,12 @@ def handle_message(ws: object, client: dict[str, object], event: dict[str, objec
         recent.popleft()
     if len(recent) >= RATE_LIMIT_COUNT:
         return send_json(ws, {"type": "error", "code": "rate_limited", "message": "too many messages"})
+    last_message_at = float(client.get("last_message_at") or 0)
+    if SLOW_MODE_SECONDS and now - last_message_at < SLOW_MODE_SECONDS:
+        remaining = max(1, int(SLOW_MODE_SECONDS - (now - last_message_at)))
+        return send_json(ws, {"type": "error", "code": "slow_mode", "message": f"slow mode: wait {remaining} seconds"})
     recent.append(now)
+    client["last_message_at"] = now
     message, created = persist_message(int(client["user_id"]), str(client["username"]), client_message_id, body.strip(), channel_id, reply_to)
     if not send_json(ws, {"type": "message_ack", "client_message_id": client_message_id, "created": created, "message": message}):
         return False
