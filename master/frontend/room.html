@@ -116,7 +116,7 @@ function updateComposer() {
   soundToggle.disabled = !notificationSoundsEnabled;
   soundToggle.textContent = soundEnabled && notificationSoundsEnabled ? "Sound on" : "Sound off";
   voiceToggle.textContent = voiceChannel === currentChannel ? "Leave voice" : "Join voice";
-  voiceChannelName.textContent = channelTabs.querySelector(`[data-channel="${CSS.escape(currentChannel)}"]`)?.textContent || currentChannel;
+  voiceChannelName.textContent = channelTabs.querySelector(`[data-channel="${CSS.escape(currentChannel)}"] .channel-label`)?.textContent || currentChannel;
   voiceStatus.textContent = voiceChannel === currentChannel ? "Connected. Your microphone is live." : "Join to start talking.";
 }
 
@@ -460,7 +460,10 @@ function populateChannels(channels, categories) {
     tab.className = `channel-tab ${channel.type === "voice" ? "voice-channel" : "text-channel"}`;
     tab.dataset.channel = channel.id;
     tab.title = channel.messaging_enabled === false ? "Read-only channel" : "Open channel";
-    tab.textContent = channel.name;
+    const label = document.createElement("span");
+    label.className = "channel-label";
+    label.textContent = channel.name;
+    tab.append(label);
     const unread = document.createElement("span");
     unread.className = "unread-badge";
     unread.hidden = true;
