@@ -128,6 +128,41 @@ def clean_registration_payload(payload: dict[str, Any]):
     return {"username": username, "password": password}, None
 
 
+def clean_profile_payload(payload: dict[str, Any]):
+    display_name = str(payload.get("display_name") or "").strip()
+    description = str(payload.get("description") or "").strip()
+    pronouns = payload.get("pronouns", [])
+    if not isinstance(pronouns, list):
+        return None, "pronouns must be a list"
+    cleaned_pronouns = []
+    for pronoun in pronouns[:10]:
+        value = str(pronoun).strip()
+        if not value or len(value) > 6:
+            return None, "each pronoun must be 1-6 characters"
+        cleaned_pronouns.append(value)
+    if len(display_name) > 20:
+        return None, "name must be 20 characters or fewer"
+    if len(description) > 200:
+        return None, "description must be 200 characters or fewer"
+    return {"display_name": display_name, "description": description, "pronouns": cleaned_pronouns}, None
+
+
+def profile_from_row(user: dict[str, Any]) -> dict[str, Any]:
+    try:
+        pronouns = json.loads(user.get("pronouns") or "[]")
+    except (TypeError, json.JSONDecodeError):
+        pronouns = []
+    if not isinstance(pronouns, list):
+        pronouns = []
+    return {
+        "id": int(user["id"]),
+        "username": user["username"],
+        "display_name": user.get("display_name") or "",
+        "description": user.get("description") or "",
+        "pronouns": [str(value) for value in pronouns],
+    }
+
+
 def clean_server_payload(payload: dict[str, Any]):
     raw_address = str(payload.get("ip_address") or payload.get("address") or "").strip()
     parsed_endpoint = room_endpoint(raw_address) if "://" in raw_address else None
@@ -270,7 +305,7 @@ def register():
         return error(message, 400)
     try:
         with db_connection() as connection, connection.cursor() as cursor:
-            cursor.execute("INSERT INTO users (username, password_hash) VALUES (%s, %s)", (clean["username"], password_hasher.hash(clean["password"])))
+            cursor.execute("INSERT INTO users (username, password_hash, display_name, description, pronouns) VALUES (%s, %s, %s, %s, %s)", (clean["username"], password_hasher.hash(clean["password"]), "", "", "[]"))
             user_id = cursor.lastrowid
     except pymysql.err.IntegrityError as exc:
         if exc.args and exc.args[0] == 1062:
@@ -326,6 +361,42 @@ def me():
         session.clear()
         return error("user not found", 401)
     return jsonify({"ok": True, "user": user, "csrf_token": session.get("csrf_token")})
+
+
+@app.get("/auth/profile")
+@login_required
+def profile():
+    try:
+        with db_connection() as connection, connection.cursor() as cursor:
+            cursor.execute("SELECT id, username, display_name, description, pronouns FROM users WHERE id = %s", (current_user_id(),))
+            user = cursor.fetchone()
+    except pymysql.MySQLError:
+        return error("database unavailable")
+    if not user:
+        return error("user not found", 404)
+    return jsonify({"ok": True, "profile": profile_from_row(user), "csrf_token": session.get("csrf_token")})
+
+
+@app.put("/auth/profile")
+@login_required
+def update_profile():
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return error("expected json object", 400)
+    clean, message = clean_profile_payload(payload)
+    if message:
+        return error(message, 400)
+    try:
+        with db_connection() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                "UPDATE users SET display_name = %s, description = %s, pronouns = %s WHERE id = %s",
+                (clean["display_name"], clean["description"], json.dumps(clean["pronouns"]), current_user_id()),
+            )
+            cursor.execute("SELECT id, username, display_name, description, pronouns FROM users WHERE id = %s", (current_user_id(),))
+            user = cursor.fetchone()
+    except pymysql.MySQLError:
+        return error("database unavailable")
+    return jsonify({"ok": True, "profile": profile_from_row(user)})
 
 
 @app.post("/servers")
@@ -577,6 +648,8 @@ app.add_url_rule("/api/auth/signup", endpoint="api_signup", view_func=register, 
 app.add_url_rule("/api/auth/login", endpoint="api_login", view_func=login, methods=["POST"])
 app.add_url_rule("/api/auth/logout", endpoint="api_logout", view_func=logout, methods=["POST"])
 app.add_url_rule("/api/auth/me", endpoint="api_me", view_func=me, methods=["GET"])
+app.add_url_rule("/api/auth/profile", endpoint="api_profile", view_func=profile, methods=["GET"])
+app.add_url_rule("/api/auth/profile", endpoint="api_update_profile", view_func=update_profile, methods=["PUT"])
 app.add_url_rule("/api/servers/joined", endpoint="api_joined", view_func=list_servers, methods=["GET"])
 app.add_url_rule("/api/servers/discover", endpoint="api_discover", view_func=discover_servers, methods=["GET"])
 app.add_url_rule("/api/servers/join", endpoint="api_join", view_func=join_discovered_server, methods=["POST"])

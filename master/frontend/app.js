@@ -127,6 +127,38 @@ async function bindAuthAction() {
   }
 }
 
+async function bindProfileForm() {
+  const form = document.querySelector("[data-profile-form]");
+  if (!form) return;
+  const name = form.elements.display_name;
+  const description = form.elements.description;
+  const pronouns = form.elements.pronouns;
+  try {
+    const data = await api("/auth/profile");
+    name.value = data.profile.display_name || "";
+    description.value = data.profile.description || "";
+    pronouns.value = (data.profile.pronouns || []).join(", ");
+  } catch (error) {
+    showError(form, error.message);
+    return;
+  }
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    form.querySelector(".form-error").hidden = true;
+    const button = form.querySelector("button[type=submit]");
+    button.disabled = true;
+    try {
+      const values = pronouns.value.split(",").map(value => value.trim()).filter(Boolean);
+      await api("/auth/profile", { method: "PUT", body: JSON.stringify({ display_name: name.value, description: description.value, pronouns: values }) });
+      showToast("Profile saved.");
+    } catch (error) {
+      showError(form, error.message);
+    } finally {
+      button.disabled = false;
+    }
+  });
+}
+
 function showToast(message) {
   const toast = document.createElement("div");
   toast.className = "toast";
@@ -137,5 +169,6 @@ function showToast(message) {
 
 bindAuthForm();
 bindAuthAction();
+bindProfileForm();
 loadJoinedRooms();
 loadDiscoverRooms();
