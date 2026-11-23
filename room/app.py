@@ -267,6 +267,14 @@ def master_request(path: str, payload: dict[str, object]) -> tuple[dict[str, obj
         return {"ok": False, "error": str(error)}, 502
 
 
+@app.get("/profiles/<int:user_id>")
+def room_profile(user_id: int):
+    if auth_from_request() is None:
+        return jsonify({"ok": False, "error": "authentication required"}), 401
+    body, status = master_request(f"/api/rooms/{ROOM_ID}/profiles/{user_id}", {})
+    return jsonify(body), status
+
+
 def register_with_master(retries: int = 3) -> bool:
     for attempt in range(retries):
         body, status = master_request("/api/rooms/register", registration_payload())
@@ -496,11 +504,11 @@ def handle_message(ws: object, client: dict[str, object], event: dict[str, objec
         leave_voice(ws, client)
         client["voice_channel"] = channel_id
         client["peer_id"] = peer_id
-        peers = [{"peer_id": other_client["peer_id"], "username": other_client.get("username", "Unknown")} for _other_ws, other_client in voice_clients(channel_id, exclude=ws) if isinstance(other_client.get("peer_id"), str)]
+        peers = [{"peer_id": other_client["peer_id"], "user_id": other_client.get("user_id"), "username": other_client.get("username", "Unknown")} for _other_ws, other_client in voice_clients(channel_id, exclude=ws) if isinstance(other_client.get("peer_id"), str)]
         if not send_json(ws, {"type": "voice_peers", "channel_id": channel_id, "peers": peers}):
             return False
         for other_ws, _other_client in voice_clients(channel_id, exclude=ws):
-            if not send_json(other_ws, {"type": "voice_user_joined", "channel_id": channel_id, "peer_id": peer_id, "username": client.get("username", "Unknown")}):
+            if not send_json(other_ws, {"type": "voice_user_joined", "channel_id": channel_id, "peer_id": peer_id, "user_id": client.get("user_id"), "username": client.get("username", "Unknown")}):
                 remove_client(other_ws)
         return True
     if event.get("type") == "leave_voice":
@@ -635,7 +643,7 @@ def websocket_room(ws: object, room_id: str):
     client = {"user_id": claims["user_id"], "username": claims["username"], "channel_id": claims.get("channel_id", "general"), "recent": deque(), "send_lock": threading.Lock()}
     with clients_lock:
         clients[ws] = client
-    if not send_json(ws, {"type": "authenticated", "room_id": ROOM_ID, "channel_id": client["channel_id"], "channel_type": CHANNEL_MAP[str(client["channel_id"])]["type"], "channels": channel_payload(), "categories": category_payload(), "images_enabled": channel_images_enabled(str(client["channel_id"])), "messaging_enabled": messaging_enabled_for_client(client), "notification_sounds_enabled": channel_notifications_enabled(str(client["channel_id"])), "history": history(str(client["channel_id"]))}):
+    if not send_json(ws, {"type": "authenticated", "room_id": ROOM_ID, "user_id": client["user_id"], "channel_id": client["channel_id"], "channel_type": CHANNEL_MAP[str(client["channel_id"])]["type"], "channels": channel_payload(), "categories": category_payload(), "images_enabled": channel_images_enabled(str(client["channel_id"])), "messaging_enabled": messaging_enabled_for_client(client), "notification_sounds_enabled": channel_notifications_enabled(str(client["channel_id"])), "history": history(str(client["channel_id"]))}):
         remove_client(ws)
         return
     try:
