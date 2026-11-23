@@ -165,6 +165,8 @@ async function bindProfileForm() {
     field.addEventListener("input", updatePreview);
     field.addEventListener("change", updatePreview);
   });
+  websiteTheme.addEventListener("change", () => applyWebsiteTheme(websiteTheme.value));
+  profileTheme.addEventListener("change", updatePreview);
   updatePreview();
   try {
     const data = await api("/auth/profile");
