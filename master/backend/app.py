@@ -390,7 +390,7 @@ def update_profile():
         with db_connection() as connection, connection.cursor() as cursor:
             cursor.execute(
                 "UPDATE users SET display_name = %s, description = %s, pronouns = %s WHERE id = %s",
-                (clean["display_name"], clean["description"], json.dumps(clean["pronouns"]), current_user_id()),
+                (clean["display_name"], clean["description"], json.dumps(clean["pronouns"], ensure_ascii=False, separators=(",", ":")), current_user_id()),
             )
             cursor.execute("SELECT id, username, display_name, description, pronouns FROM users WHERE id = %s", (current_user_id(),))
             user = cursor.fetchone()
