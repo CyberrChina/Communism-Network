@@ -2,7 +2,9 @@ const API_BASE = window.NETWORK_API_BASE || "/api";
 let csrfToken = "";
 
 function applyWebsiteTheme(theme) {
-  document.documentElement.dataset.theme = ["paper", "midnight", "red"].includes(theme) ? theme : "paper";
+  const selected = ["paper", "midnight", "red"].includes(theme) ? theme : "paper";
+  document.documentElement.dataset.theme = selected;
+  try { localStorage.setItem("cn-website-theme", selected); } catch {}
 }
 
 async function loadWebsiteTheme() {
