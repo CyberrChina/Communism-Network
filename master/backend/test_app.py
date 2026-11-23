@@ -1,6 +1,6 @@
 import unittest
 
-from app import app, clean_registration_payload, clean_server_payload
+from app import app, clean_profile_payload, clean_registration_payload, clean_server_payload
 
 
 class ValidationTests(unittest.TestCase):
@@ -17,6 +17,13 @@ class ValidationTests(unittest.TestCase):
         self.assertEqual(server, {"ip_address": "2001:db8::1", "port": 25565})
         self.assertIsNotNone(clean_server_payload({"ip_address": "not-an-ip", "port": 25565})[1])
         self.assertIsNotNone(clean_server_payload({"ip_address": "127.0.0.1", "port": 70000})[1])
+
+    def test_profile_validation(self):
+        profile, error = clean_profile_payload({"display_name": "Dahlia", "description": "hello", "pronouns": ["she", "they"]})
+        self.assertIsNone(error)
+        self.assertEqual(profile["pronouns"], ["she", "they"])
+        self.assertIn("20 characters", clean_profile_payload({"display_name": "x" * 21})[1])
+        self.assertIn("6 characters", clean_profile_payload({"pronouns": ["toolong"]})[1])
 
 
 class RouteTests(unittest.TestCase):
