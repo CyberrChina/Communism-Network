@@ -62,7 +62,7 @@ async function showProfile(userId, fallbackName) {
   profileAvatar.textContent = (fallbackName || "?").slice(0, 1).toUpperCase();
   try {
     const response = await fetch(`${roomOrigin}/profiles/${encodeURIComponent(userId)}`, { headers: { Authorization: `Bearer ${connectionTicket}` } });
-    const data = await response.json();
+    const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.error || "Profile unavailable");
     const profile = data.profile;
     profileDisplayName.textContent = profile.display_name || profile.username;
