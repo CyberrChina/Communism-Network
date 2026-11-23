@@ -68,6 +68,7 @@ def load_settings() -> dict[str, object]:
 ROOM_SETTINGS = load_settings()
 _env_images_enabled = os.environ.get("ROOM_IMAGES_ENABLED")
 IMAGES_ENABLED = bool(ROOM_SETTINGS.get("images_enabled", _env_images_enabled != "0" if _env_images_enabled is not None else True))
+MAX_IMAGE_BYTES = int(os.environ.get("ROOM_MAX_IMAGE_BYTES", str(ROOM_SETTINGS.get("image_upload_max_bytes", MAX_IMAGE_BYTES))))
 
 
 def configured_channels() -> list[dict[str, str]]:
@@ -126,6 +127,18 @@ def channel_notifications_enabled(channel_id: str) -> bool:
         if isinstance(value, dict) and "notification_sounds_enabled" in value:
             enabled = bool(value["notification_sounds_enabled"])
     return enabled
+
+
+def image_upload_limit(channel_id: str) -> int:
+    channel_settings = ROOM_SETTINGS.get("channels", {})
+    if isinstance(channel_settings, dict):
+        value = channel_settings.get(channel_id)
+        if isinstance(value, dict) and "image_upload_max_bytes" in value:
+            try:
+                return max(1, int(value["image_upload_max_bytes"]))
+            except (TypeError, ValueError):
+                pass
+    return max(1, MAX_IMAGE_BYTES)
 
 
 def channel_payload() -> list[dict[str, object]]:
@@ -546,7 +559,7 @@ def handle_message(ws: object, client: dict[str, object], event: dict[str, objec
 def health():
     with clients_lock:
         connected = len(clients)
-    return jsonify({"ok": True, "room_id": ROOM_ID, "room_name": ROOM_NAME, "protocol_version": PROTOCOL_VERSION, "connected_clients": connected, "ephemeral_message_key": EPHEMERAL_MESSAGE_KEY, "images_enabled": IMAGES_ENABLED, "image_retention_days": IMAGE_RETENTION_DAYS, "channels": channel_payload(), "categories": category_payload()})
+    return jsonify({"ok": True, "room_id": ROOM_ID, "room_name": ROOM_NAME, "protocol_version": PROTOCOL_VERSION, "connected_clients": connected, "ephemeral_message_key": EPHEMERAL_MESSAGE_KEY, "images_enabled": IMAGES_ENABLED, "image_upload_max_bytes": MAX_IMAGE_BYTES, "image_retention_days": IMAGE_RETENTION_DAYS, "channels": channel_payload(), "categories": category_payload()})
 
 
 @app.get("/channels")
@@ -577,8 +590,9 @@ def upload_media(channel_id: str):
     mime_type = (upload.mimetype or "").lower()
     if mime_type not in ALLOWED_IMAGE_TYPES:
         return jsonify({"ok": False, "error": "unsupported image type"}), 415
-    data = upload.read(MAX_IMAGE_BYTES + 1)
-    if len(data) > MAX_IMAGE_BYTES:
+    max_image_bytes = image_upload_limit(channel_id)
+    data = upload.read(max_image_bytes + 1)
+    if len(data) > max_image_bytes:
         return jsonify({"ok": False, "error": "image is too large"}), 413
     original_name = Path(upload.filename).name[:128] or "image"
     message, created = persist_image(int(claims["user_id"]), str(claims["username"]), client_message_id, channel_id, original_name, mime_type, data)

@@ -42,6 +42,7 @@ let reconnectAttempts = 0;
 let pageVisible = !document.hidden;
 const peerConnections = new Map();
 const voiceMemberMap = new Map();
+const voiceMonitors = new Map();
 const rendered = new Set();
 
 async function api(path, options = {}) {
@@ -86,7 +87,7 @@ function renderVoiceMembers() {
   }
   for (const member of voiceMemberMap.values()) {
     const item = document.createElement("article");
-    item.className = "voice-member";
+    item.className = `voice-member${member.speaking ? " speaking" : ""}`;
     const avatar = document.createElement("span");
     avatar.className = "voice-avatar";
     avatar.textContent = (member.username || "?").trim().slice(0, 1).toUpperCase();
@@ -114,6 +115,44 @@ function removeVoiceMember(id) {
   renderVoiceMembers();
 }
 
+function setVoiceSpeaking(id, speaking) {
+  const member = voiceMemberMap.get(id);
+  if (!member || member.speaking === speaking) return;
+  member.speaking = speaking;
+  renderVoiceMembers();
+}
+
+function stopSpeakingMonitor(id) {
+  const monitor = voiceMonitors.get(id);
+  if (monitor) cancelAnimationFrame(monitor.frame);
+  voiceMonitors.delete(id);
+  setVoiceSpeaking(id, false);
+}
+
+function monitorSpeaking(id, stream) {
+  stopSpeakingMonitor(id);
+  try {
+    audioContext ||= new AudioContext();
+    audioContext.resume?.().catch(() => {});
+    const analyser = audioContext.createAnalyser();
+    analyser.fftSize = 512;
+    const source = audioContext.createMediaStreamSource(stream);
+    source.connect(analyser);
+    const data = new Uint8Array(analyser.fftSize);
+    const monitor = { frame: 0 };
+    const sample = () => {
+      if (!voiceMonitors.has(id)) return;
+      analyser.getByteTimeDomainData(data);
+      let sum = 0;
+      for (const value of data) { const level = (value - 128) / 128; sum += level * level; }
+      setVoiceSpeaking(id, Math.sqrt(sum / data.length) > 0.045);
+      monitor.frame = requestAnimationFrame(sample);
+    };
+    voiceMonitors.set(id, monitor);
+    sample();
+  } catch (_) { /* Audio metering is optional; the call can still work. */ }
+}
+
 function playNotification() {
   if (!soundEnabled || !notificationSoundsEnabled) return;
   try {
@@ -137,6 +176,7 @@ function sendVoiceSignal(targetPeerId, signal) {
 function closePeer(remotePeerId) {
   const peer = peerConnections.get(remotePeerId);
   if (peer) peer.close();
+  stopSpeakingMonitor(remotePeerId);
   peerConnections.delete(remotePeerId);
   document.querySelector(`#voice-audio-${CSS.escape(remotePeerId)}`)?.remove();
 }
@@ -151,6 +191,7 @@ async function createPeer(remotePeerId, initiator) {
     let audio = document.querySelector(`#voice-audio-${CSS.escape(remotePeerId)}`);
     if (!audio) { audio = document.createElement("audio"); audio.id = `voice-audio-${remotePeerId}`; audio.autoplay = true; audio.playsInline = true; audio.hidden = true; document.body.append(audio); }
     audio.srcObject = event.streams[0];
+    monitorSpeaking(remotePeerId, event.streams[0]);
   };
   peer.onconnectionstatechange = () => { if (["failed", "closed", "disconnected"].includes(peer.connectionState)) closePeer(remotePeerId); };
   if (initiator) {
@@ -168,6 +209,7 @@ async function joinVoice() {
     voiceChannel = currentChannel;
     socket.send(JSON.stringify({ type: "join_voice", channel_id: currentChannel, peer_id: peerId }));
     addVoiceMember(peerId, "You", true);
+    monitorSpeaking(peerId, localStream);
     voiceToggle.textContent = "Leave voice";
     setStatus("Connected to voice channel.");
   } catch (error) { setStatus("Microphone access was denied or unavailable.", true); }
@@ -176,6 +218,7 @@ async function joinVoice() {
 function leaveVoice() {
   if (voiceChannel && socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "leave_voice" }));
   localStream?.getTracks().forEach(track => track.stop());
+  stopSpeakingMonitor(peerId);
   localStream = undefined;
   for (const remotePeerId of peerConnections.keys()) closePeer(remotePeerId);
   voiceChannel = "";
@@ -285,7 +328,6 @@ function openSocket(connection) {
     } else if (payload.type === "voice_user_joined") {
       if (payload.peer_id !== peerId && voiceChannel === payload.channel_id) {
         addVoiceMember(payload.peer_id, payload.username);
-        createPeer(payload.peer_id, true);
       }
     } else if (payload.type === "voice_user_left") {
       closePeer(payload.peer_id);
