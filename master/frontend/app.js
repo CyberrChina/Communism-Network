@@ -10,7 +10,7 @@ function applyWebsiteTheme(theme) {
 async function loadWebsiteTheme() {
   try {
     const data = await api("/auth/profile");
-    applyWebsiteTheme(data.profile.website_theme);
+    if (["paper", "midnight", "red"].includes(data.profile?.website_theme)) applyWebsiteTheme(data.profile.website_theme);
   } catch {}
 }
 

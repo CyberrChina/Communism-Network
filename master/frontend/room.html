@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en"><head><script>try{document.documentElement.dataset.theme=localStorage.getItem("cn-website-theme")||"paper"}catch(e){}</script><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Room | Communism Network</title><link rel="stylesheet" href="app.css?v=20261123-themes"></head>
+<html lang="en"><head><script>try{document.documentElement.dataset.theme=localStorage.getItem("cn-website-theme")||"paper"}catch(e){}</script><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Room | Communism Network</title><link rel="stylesheet" href="app.css?v=20261123-room-full"></head>
 <body class="room-page"><header class="shell topbar"><a class="brand" href="index.html"><span class="brand-mark">✦</span> Communism Network</a><nav class="nav"><a href="index.html">Home</a><a href="discover.html">Discover</a><a href="profile.html" class="button ghost small profile-link">Profile</a><button class="button ghost small" data-logout>Sign in</button></nav></header>
 <main class="shell app-main room-layout"><section class="dashboard-head"><div><span class="eyebrow">Direct room connection</span><h1 id="room-title">Connecting...</h1><p id="connection-status">Requesting an authorized room ticket.</p></div><a class="button ghost small" href="index.html">Back home</a></section>
 <section class="chat-panel"><div class="chat-workspace"><aside class="channel-sidebar"><div class="channel-heading"><span>Channels</span><span class="channel-count" id="channel-count">0</span></div><nav id="channel-tabs" class="channel-tabs" aria-label="Room channels"></nav><select id="channel-select" class="sr-only" disabled aria-hidden="true"></select></aside><div class="chat-column"><section id="voice-panel" class="voice-panel" hidden><div class="voice-panel-head"><div><span class="voice-kicker">Voice channel</span><h2 id="voice-channel-name">Lounge</h2><p id="voice-status">Join to start talking.</p></div><button id="voice-toggle" class="voice-button" type="button">Join voice</button></div><div id="voice-members" class="voice-members" aria-live="polite"></div></section><div id="message-list" class="message-list" aria-live="polite"><div class="empty">Loading encrypted room history...</div></div><form id="message-form" class="message-form"><label id="image-picker-label" class="media-button" hidden title="Attach an image"><span aria-hidden="true">+</span><span class="sr-only">Attach image</span><input id="image-picker" type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden></label><label class="sr-only" for="message-input">Message</label><textarea id="message-input" rows="2" maxlength="2000" placeholder="Write a message..." disabled></textarea><button id="sound-toggle" class="sound-button" type="button" title="Toggle notification sounds">Sound on</button><button class="button primary" type="submit" disabled>Send</button></form></div></div></section></main><section id="profile-card" class="profile-popover" hidden role="dialog" aria-label="User profile"><button id="profile-close" class="profile-close" type="button" aria-label="Close profile">×</button><div class="profile-popover-avatar" id="profile-avatar"></div><strong id="profile-display-name"></strong><span id="profile-username"></span><span id="profile-pronouns"></span><p id="profile-description"></p></section>
@@ -92,9 +92,11 @@ async function api(path, options = {}) {
 async function loadRoomTheme() {
   try {
     const data = await api("/auth/profile");
-    const theme = ["paper", "midnight", "red"].includes(data.profile.website_theme) ? data.profile.website_theme : "paper";
-    document.documentElement.dataset.theme = theme;
-    localStorage.setItem("cn-website-theme", theme);
+    const theme = data.profile?.website_theme;
+    if (["paper", "midnight", "red"].includes(theme)) {
+      document.documentElement.dataset.theme = theme;
+      localStorage.setItem("cn-website-theme", theme);
+    }
   } catch {}
 }
 
