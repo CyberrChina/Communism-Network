@@ -4,7 +4,7 @@ server {
     server_name communismnetwork.calvinthegreat.org;
 
     root /var/www/communism-network/frontend;
-    index index.html;
+    index home.html;
 
     location /api/ {
         proxy_pass http://127.0.0.1:5000/api/;
@@ -46,7 +46,7 @@ server {
     }
 
     location / {
-        try_files $uri $uri/ /index.html;
+        try_files $uri $uri/ /home.html;
     }
 }
 
@@ -58,7 +58,7 @@ server {
     server_name communismnetwork.calvinthegreat.org;
 
     root /var/www/communism-network/frontend;
-    index index.html;
+    index home.html;
 
     location /api/ {
         proxy_pass http://127.0.0.1:5000/api/;
@@ -112,7 +112,7 @@ server {
     }
 
     location / {
-        try_files $uri $uri/ /index.html;
+        try_files $uri $uri/ /home.html;
     }
 }
 
