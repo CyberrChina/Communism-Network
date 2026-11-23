@@ -9,7 +9,7 @@ import threading
 import time
 import uuid
 from collections import deque
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -223,6 +223,17 @@ def init_db() -> None:
                 size_bytes INTEGER NOT NULL,
                 uploaded_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS scheduled_messages (
+                schedule_id TEXT PRIMARY KEY,
+                room_id TEXT NOT NULL,
+                channel_id TEXT NOT NULL,
+                sender_id INTEGER NOT NULL,
+                sender_name TEXT NOT NULL,
+                client_message_id TEXT NOT NULL,
+                ciphertext BLOB NOT NULL,
+                send_at TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
             CREATE INDEX IF NOT EXISTS idx_messages_room_time
                 ON messages(room_id, channel_id, sent_at, message_id);
             CREATE INDEX IF NOT EXISTS idx_media_uploaded_at
@@ -372,7 +383,7 @@ def history(channel_id: str = "general") -> list[dict[str, object]]:
     return [media_message_from_row(row) if row["message_type"] == "image" else message_from_row(row) for row in reversed(rows)]
 
 
-def persist_message(user_id: int, username: str, client_message_id: str, body: str, channel_id: str = "general", reply_to: str | None = None) -> tuple[dict[str, object], bool]:
+def persist_message(user_id: int, username: str, client_message_id: str, body: str, channel_id: str = "general", reply_to: str | None = None, message_type: str = "text") -> tuple[dict[str, object], bool]:
     message_id = uuid.uuid4().hex
     sent_at = utc_now()
     encrypted = cipher.encrypt(body.encode("utf-8"))
@@ -383,7 +394,7 @@ def persist_message(user_id: int, username: str, client_message_id: str, body: s
                    (message_id, room_id, sender_id, sender_name, client_message_id,
                    channel_id, message_type, ciphertext, sent_at, protocol_version, reply_to)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (message_id, ROOM_ID, user_id, username, client_message_id, channel_id, "text", encrypted, sent_at, PROTOCOL_VERSION, reply_to),
+                (message_id, ROOM_ID, user_id, username, client_message_id, channel_id, message_type, encrypted, sent_at, PROTOCOL_VERSION, reply_to),
             )
             row = connection.execute("SELECT * FROM messages WHERE message_id = ?", (message_id,)).fetchone()
             return message_from_row(row), True
@@ -393,6 +404,38 @@ def persist_message(user_id: int, username: str, client_message_id: str, body: s
                 (user_id, client_message_id),
             ).fetchone()
             return message_from_row(row), False
+
+
+def schedule_message(user_id: int, username: str, client_message_id: str, body: str, channel_id: str, send_at: str) -> str:
+    schedule_id = uuid.uuid4().hex
+    with db_connection() as connection:
+        connection.execute(
+            "INSERT INTO scheduled_messages (schedule_id, room_id, channel_id, sender_id, sender_name, client_message_id, ciphertext, send_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (schedule_id, ROOM_ID, channel_id, user_id, username, client_message_id, cipher.encrypt(body.encode("utf-8")), send_at, utc_now()),
+        )
+    return schedule_id
+
+
+def deliver_scheduled_messages() -> None:
+    now = utc_now()
+    with db_connection() as connection:
+        rows = connection.execute("SELECT * FROM scheduled_messages WHERE room_id = ? AND send_at <= ? ORDER BY send_at LIMIT 25", (ROOM_ID, now)).fetchall()
+        for row in rows:
+            try:
+                body = cipher.decrypt(bytes(row["ciphertext"])).decode("utf-8")
+                message, _created = persist_message(int(row["sender_id"]), str(row["sender_name"]), str(row["client_message_id"]), body, str(row["channel_id"]))
+                broadcast({"type": "new_message", "message": message}, str(row["channel_id"]))
+            finally:
+                connection.execute("DELETE FROM scheduled_messages WHERE schedule_id = ?", (row["schedule_id"],))
+
+
+def scheduled_loop() -> None:
+    while True:
+        time.sleep(1)
+        try:
+            deliver_scheduled_messages()
+        except (OSError, sqlite3.Error, InvalidToken, UnicodeDecodeError):
+            pass
 
 
 def find_message(message_id: str, channel_id: str) -> sqlite3.Row | None:
@@ -610,6 +653,55 @@ def handle_message(ws: object, client: dict[str, object], event: dict[str, objec
                 return send_json(other_ws, {"type": "voice_signal", "from_peer_id": peer_id, "signal": signal})
         return send_json(ws, {"type": "error", "code": "voice_peer_not_found", "message": "voice peer not found"})
     channel_id = str(client.get("channel_id") or "general")
+    if event.get("type") == "schedule_message":
+        body = event.get("body")
+        send_at = event.get("send_at")
+        client_message_id = event.get("client_message_id")
+        if CHANNEL_MAP.get(channel_id, {}).get("type") != "text" or not channel_messaging_enabled(channel_id) or not isinstance(body, str) or not body.strip() or len(body) > MAX_MESSAGE_LENGTH or not isinstance(send_at, str) or not isinstance(client_message_id, str):
+            return send_json(ws, {"type": "error", "code": "invalid_scheduled_message", "message": "invalid scheduled message"})
+        try:
+            scheduled_for = datetime.fromisoformat(send_at.replace("Z", "+00:00"))
+            if scheduled_for.tzinfo is None or scheduled_for <= datetime.now(timezone.utc) or scheduled_for > datetime.now(timezone.utc) + timedelta(days=365):
+                raise ValueError
+        except ValueError:
+            return send_json(ws, {"type": "error", "code": "invalid_schedule_time", "message": "schedule time must be in the future"})
+        schedule_id = schedule_message(int(client["user_id"]), str(client["username"]), client_message_id, body.strip(), channel_id, scheduled_for.astimezone(timezone.utc).isoformat())
+        return send_json(ws, {"type": "scheduled_ack", "schedule_id": schedule_id, "send_at": scheduled_for.astimezone(timezone.utc).isoformat()})
+    if event.get("type") == "create_poll":
+        question = event.get("question")
+        options = event.get("options")
+        client_message_id = event.get("client_message_id")
+        if CHANNEL_MAP.get(channel_id, {}).get("type") != "text" or not channel_messaging_enabled(channel_id) or not isinstance(question, str) or not 1 <= len(question.strip()) <= 300 or not isinstance(options, list) or not 2 <= len(options) <= 10 or not all(isinstance(option, str) and 1 <= len(option.strip()) <= 100 for option in options) or not isinstance(client_message_id, str):
+            return send_json(ws, {"type": "error", "code": "invalid_poll", "message": "polls need a question and 2 to 10 options"})
+        poll = {"question": question.strip(), "options": [option.strip() for option in options], "votes": {}}
+        message, created = persist_message(int(client["user_id"]), str(client["username"]), client_message_id, json.dumps(poll, separators=(",", ":")), channel_id, message_type="poll")
+        send_json(ws, {"type": "message_ack", "client_message_id": client_message_id, "created": created, "message": message})
+        if created:
+            broadcast({"type": "new_message", "message": message}, channel_id)
+        return True
+    if event.get("type") == "vote_poll":
+        message_id = event.get("message_id")
+        option_index = event.get("option_index")
+        row = find_message(message_id, channel_id) if isinstance(message_id, str) else None
+        if row is None or row["message_type"] != "poll" or not isinstance(option_index, int):
+            return send_json(ws, {"type": "error", "code": "invalid_poll_vote", "message": "invalid poll vote"})
+        try:
+            poll = json.loads(cipher.decrypt(bytes(row["ciphertext"])).decode("utf-8"))
+            options = poll["options"]
+            votes = poll.setdefault("votes", {})
+            if not 0 <= option_index < len(options):
+                raise ValueError
+            for voters in votes.values():
+                if isinstance(voters, list) and client["user_id"] in voters:
+                    voters.remove(client["user_id"])
+            votes.setdefault(str(option_index), []).append(client["user_id"])
+            with db_connection() as connection:
+                connection.execute("UPDATE messages SET ciphertext = ? WHERE message_id = ?", (cipher.encrypt(json.dumps(poll, separators=(",", ":")).encode("utf-8")), message_id))
+                updated = connection.execute("SELECT * FROM messages WHERE message_id = ?", (message_id,)).fetchone()
+            broadcast({"type": "message_updated", "message": message_from_row(updated)}, channel_id)
+            return True
+        except (InvalidToken, UnicodeDecodeError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+            return send_json(ws, {"type": "error", "code": "invalid_poll_vote", "message": "invalid poll vote"})
     if event.get("type") in {"typing", "read_receipt"}:
         payload = {"type": event["type"], "channel_id": channel_id, "user_id": client["user_id"], "username": client["username"]}
         if event["type"] == "typing":
@@ -795,6 +887,7 @@ init_db()
 if os.environ.get("ROOM_AUTOSTART_REGISTRATION") == "1":
     threading.Thread(target=runtime_loop, name="master-registration", daemon=True).start()
     threading.Thread(target=media_cleanup_loop, name="media-cleanup", daemon=True).start()
+    threading.Thread(target=scheduled_loop, name="scheduled-messages", daemon=True).start()
 
 
 if __name__ == "__main__":
@@ -803,4 +896,5 @@ if __name__ == "__main__":
         print("warning: initial master registration failed; use /register-with-master to retry")
     threading.Thread(target=heartbeat_loop, daemon=True).start()
     threading.Thread(target=media_cleanup_loop, daemon=True).start()
+    threading.Thread(target=scheduled_loop, name="scheduled-messages", daemon=True).start()
     app.run(host=os.environ.get("ROOM_BIND_HOST", "127.0.0.1"), port=int(os.environ.get("ROOM_PORT", "5001")), debug=False)

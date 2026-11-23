@@ -159,6 +159,9 @@ h2 { font-size: 32px; letter-spacing: -.05em; margin: 0; }
 .message-actions, .message-reactions { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 9px; }
 .message-actions button, .reaction-button { border: 1px solid var(--line); border-radius: 5px; padding: 4px 7px; color: var(--muted); background: var(--white); font-size: 11px; cursor: pointer; }
 .message-actions button:hover, .reaction-button:hover { color: var(--red); border-color: var(--red); }
+.poll-card { display: grid; gap: 7px; margin-top: 9px; padding: 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-alt); }
+.poll-card button { border: 1px solid var(--line); border-radius: 5px; padding: 8px 10px; color: var(--ink); background: var(--white); text-align: left; cursor: pointer; }
+.poll-card button:hover { border-color: var(--red); color: var(--red); }
 .typing-indicator, .replying-to { padding: 7px 14px; color: var(--muted); background: var(--white); font-size: 11px; }
 .replying-to { border-top: 1px solid var(--line); color: var(--red-dark); }
 .message-meta { display: flex; align-items: baseline; gap: 10px; }
